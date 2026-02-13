@@ -59,7 +59,7 @@ Use the subcommands to run specific operations or 'run' for the full workflow.`,
 // initServices initializes all Google API services and returns an Organizer.
 func initServices(ctx context.Context, cfg *config.Config) (*organizer.Organizer, error) {
 	// Initialize OAuth client
-	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, logging.Logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OAuth client: %w\n\nTo set up OAuth:\n1. Download credentials from Google Cloud Console\n2. Save to: %s\n\nRun 'gcal-organizer doctor' for full diagnostics", err, cfg.CredentialsFile)
 	}
@@ -261,7 +261,7 @@ Requires: Node.js and the browser/ directory to be set up.`,
 
 func runAssignTasksDryRun(ctx context.Context, cfg *config.Config, docID string) error {
 	// Initialize OAuth client to access the document
-	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, logging.Logger)
 	if err != nil {
 		return fmt.Errorf("failed to create OAuth client: %w\n\nRun 'gcal-organizer doctor' for diagnostics", err)
 	}
@@ -333,7 +333,7 @@ func runAssignTasksDryRun(ctx context.Context, cfg *config.Config, docID string)
 
 func runAssignTasksBrowser(ctx context.Context, cfg *config.Config, docID string) error {
 	// First, get assignments like dry-run mode
-	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, logging.Logger)
 	if err != nil {
 		return fmt.Errorf("failed to create OAuth client: %w\n\nRun 'gcal-organizer doctor' for diagnostics", err)
 	}
@@ -526,7 +526,7 @@ func runAssignTasksBrowser(ctx context.Context, cfg *config.Config, docID string
 // runAssignTasksForDoc scans a document for unassigned checkboxes and runs
 // browser automation to assign them. Returns (assigned, failed, error).
 func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, docID string) (int, int, error) {
-	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, logging.Logger)
 	if err != nil {
 		return 0, 0, fmt.Errorf("OAuth client: %w", err)
 	}
@@ -622,7 +622,10 @@ var configShowCmd = &cobra.Command{
 		fmt.Printf("   Gemini Model:      %s\n", cfg.GeminiModel)
 		fmt.Printf("   Gemini API Key:    %s\n", maskSecret(cfg.GeminiAPIKey))
 		fmt.Printf("   Credentials File:  %s\n", cfg.CredentialsFile)
-		fmt.Printf("   Token File:        %s\n", cfg.TokenFile)
+
+		// Show token storage location
+		tokenStorage := auth.NewTokenStorage(logging.Logger)
+		fmt.Printf("   Token Storage:     %s\n", tokenStorage.GetStorageLocation())
 		fmt.Println("───────────────────────────────────────────────────────────")
 
 		// Check if credentials exist
@@ -633,8 +636,8 @@ var configShowCmd = &cobra.Command{
 			fmt.Println("✅ OAuth credentials file found")
 		}
 
-		// Check if token exists
-		if _, err := os.Stat(cfg.TokenFile); os.IsNotExist(err) {
+		// Check if token exists in secure storage
+		if _, err := tokenStorage.LoadToken(); err != nil {
 			fmt.Println("⚠️  Not authenticated - run 'gcal-organizer auth login'")
 		} else {
 			fmt.Println("✅ OAuth token found (authenticated)")
@@ -674,7 +677,7 @@ var authLoginCmd = &cobra.Command{
 		fmt.Println("🔐 Starting OAuth2 login flow...")
 		fmt.Println("")
 
-		oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+		oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, logging.Logger)
 		if err != nil {
 			return fmt.Errorf("failed to create OAuth client: %w\n\nTo set up OAuth:\n1. Go to https://console.cloud.google.com\n2. Create OAuth 2.0 credentials (Desktop app)\n3. Download and save to: %s\n\nRun 'gcal-organizer doctor' for full diagnostics", err, cfg.CredentialsFile)
 		}
@@ -686,7 +689,7 @@ var authLoginCmd = &cobra.Command{
 
 		fmt.Println("")
 		fmt.Println("✅ Authentication successful!")
-		fmt.Printf("   Token saved to: %s\n", cfg.TokenFile)
+		fmt.Printf("   Token storage: %s\n", oauthClient.GetTokenStorageLocation())
 		fmt.Println("")
 		fmt.Println("You can now run: gcal-organizer run --dry-run")
 		return nil
@@ -717,25 +720,26 @@ var authStatusCmd = &cobra.Command{
 		}
 		fmt.Println("✅ OAuth credentials file found")
 
-		// Check token file
-		if _, err := os.Stat(cfg.TokenFile); os.IsNotExist(err) {
-			fmt.Println("❌ Not authenticated")
-			fmt.Println("")
-			fmt.Println("Run: gcal-organizer auth login")
-			return nil
-		}
-
-		// Try to load and validate token
-		oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+		// Try to load and validate token from secure storage
+		oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, logging.Logger)
 		if err != nil {
 			fmt.Printf("❌ Error loading credentials: %v\n", err)
 			return nil
 		}
 
+		storageLocation := oauthClient.GetTokenStorageLocation()
 		if oauthClient.IsAuthenticated() {
-			fmt.Println("✅ Authenticated and token valid")
+			fmt.Printf("✅ Authenticated and token valid (%s)\n", storageLocation)
 		} else {
-			fmt.Println("⚠️  Token expired - run 'gcal-organizer auth login' to refresh")
+			if storageLocation == "Not stored" {
+				fmt.Println("❌ Not authenticated")
+				fmt.Println("")
+				fmt.Println("Run: gcal-organizer auth login")
+			} else {
+				fmt.Printf("⚠️  Token exists (%s) but expired\n", storageLocation)
+				fmt.Println("")
+				fmt.Println("Run: gcal-organizer auth login")
+			}
 		}
 
 		// Check Gemini API key

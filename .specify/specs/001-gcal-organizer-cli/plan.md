@@ -19,7 +19,7 @@ Build a Go CLI tool that organizes Google Drive meeting documents, syncs calenda
 - `github.com/spf13/cobra` - CLI framework
 - `golang.org/x/oauth2/google` - OAuth2 support
 
-**Storage**: Local config file (`~/.gcal-organizer/config.yaml`) + OAuth token cache  
+**Storage**: Local config file (`~/.gcal-organizer/config.yaml`) + OAuth token in system keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager)  
 **Testing**: `go test ./...` with table-driven tests  
 **Target Platform**: macOS, Linux (cross-platform CLI)  
 **Project Type**: Single CLI application  
@@ -128,7 +128,9 @@ Configuration management:
 #### [NEW] `internal/auth/oauth.go`
 OAuth2 flow for Google Workspace APIs:
 - Interactive browser-based auth for first run
-- Token storage and refresh
+- Secure token storage in system keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager)
+- Token refresh handling
+- Fails with clear instructions if keychain unavailable (no insecure fallback)
 - Scopes: drive, docs, calendar.readonly, tasks
 
 #### [NEW] `internal/auth/gemini.go`

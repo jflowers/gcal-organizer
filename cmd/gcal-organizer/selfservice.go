@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -14,8 +13,9 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jflowers/gcal-organizer/internal/auth"
+	"github.com/jflowers/gcal-organizer/internal/logging"
 	"github.com/spf13/cobra"
-	"golang.org/x/oauth2"
 )
 
 // --- Lip Gloss styles ---
@@ -98,28 +98,17 @@ var doctorCmd = &cobra.Command{
 			failed++
 		}
 
-		// 4. token.json (OAuth token)
-		tokenFile := filepath.Join(configDir, "token.json")
-		if _, err := os.Stat(tokenFile); err == nil {
-			// Check if token is valid
-			f, err := os.Open(tokenFile)
-			if err == nil {
-				defer f.Close()
-				var tok oauth2.Token
-				if err := json.NewDecoder(f).Decode(&tok); err == nil {
-					if tok.Expiry.After(time.Now()) || tok.RefreshToken != "" {
-						fmt.Println(styledPass("OAuth token found (authenticated)"))
-						passed++
-					} else {
-						fmt.Println(styledWarn("OAuth token exists but may be expired"))
-						fmt.Println(styledFix("Run 'gcal-organizer auth login' to re-authenticate"))
-						warned++
-					}
-				} else {
-					fmt.Println(styledWarn("OAuth token file is corrupted"))
-					fmt.Println(styledFix("Run 'gcal-organizer auth login' to re-authenticate"))
-					warned++
-				}
+		// 4. OAuth token (stored in keychain)
+		tokenStorage := auth.NewTokenStorage(logging.Logger)
+		if tok, err := tokenStorage.LoadToken(); err == nil {
+			storageLocation := tokenStorage.GetStorageLocation()
+			if tok.Expiry.After(time.Now()) || tok.RefreshToken != "" {
+				fmt.Println(styledPass(fmt.Sprintf("OAuth token found - %s", storageLocation)))
+				passed++
+			} else {
+				fmt.Println(styledWarn(fmt.Sprintf("OAuth token exists (%s) but may be expired", storageLocation)))
+				fmt.Println(styledFix("Run 'gcal-organizer auth login' to re-authenticate"))
+				warned++
 			}
 		} else {
 			fmt.Println(styledFail("Not authenticated — no OAuth token found"))
@@ -298,8 +287,8 @@ var initCmd = &cobra.Command{
 		if _, err := os.Stat(credFile); os.IsNotExist(err) {
 			nextSteps = "  Next steps:\n  1. Download credentials.json (see above)\n  2. Run 'gcal-organizer auth login'"
 		} else {
-			tokenFile := filepath.Join(configDir, "token.json")
-			if _, err := os.Stat(tokenFile); os.IsNotExist(err) {
+			tokenStorage := auth.NewTokenStorage(logging.Logger)
+			if _, err := tokenStorage.LoadToken(); err != nil {
 				nextSteps = "  Next steps:\n  1. Run 'gcal-organizer auth login'"
 			} else {
 				nextSteps = "  Next steps:\n  1. Run 'gcal-organizer run --dry-run' to test"

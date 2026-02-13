@@ -116,8 +116,10 @@ Override path to the gcal-organizer binary (used by the service wrapper).
 .I ~/.gcal-organizer/credentials.json
 Google OAuth2 client credentials.
 .TP
-.I ~/.gcal-organizer/token.json
-Stored OAuth2 token (auto-generated on first login).
+.I System Keychain
+OAuth2 token stored securely in platform-native keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager). Generated on first login via
+.B auth login
+command.
 .TP
 .I ~/.gcal-organizer/config.yaml
 Configuration file (optional, env vars take precedence).

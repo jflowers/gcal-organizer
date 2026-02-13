@@ -33,9 +33,6 @@ type Config struct {
 	// CredentialsFile is the path to the Google OAuth credentials file
 	CredentialsFile string
 
-	// TokenFile is the path to store OAuth tokens
-	TokenFile string
-
 	// Verbose enables verbose output
 	Verbose bool
 
@@ -61,7 +58,6 @@ func DefaultConfig() *Config {
 		FilenameKeywords:  []string{"Notes", "Meeting"},
 		GeminiModel:       "gemini-2.0-flash",
 		CredentialsFile:   home + "/.gcal-organizer/credentials.json",
-		TokenFile:         home + "/.gcal-organizer/token.json",
 		ChromeProfilePath: chromePath,
 	}
 }

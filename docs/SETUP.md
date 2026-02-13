@@ -137,7 +137,12 @@ gcal-organizer doctor
 The OAuth flow will:
 1. Open your browser to Google's consent page
 2. Ask you to authorize the app
-3. Store the token at `~/.gcal-organizer/token.json`
+3. Store the token securely in your system keychain:
+   - **macOS**: Keychain (works by default)
+   - **Linux**: Secret Service (requires gnome-keyring or kwallet)
+   - **Windows**: Windows Credential Manager (works by default)
+
+**Note**: If your system doesn't have a keychain configured, authentication will fail with instructions to set one up. This ensures your OAuth token is always stored securely.
 
 ---
 
@@ -231,18 +236,19 @@ Your `credentials.json` may be corrupted or wrong type:
 
 ### "Token expired" or authentication issues
 
-Delete the token and re-authenticate:
+Re-authenticate to refresh the token:
 ```bash
-rm ~/.gcal-organizer/token.json
 ./gcal-organizer auth login
 ```
+
+The new token will replace the existing one in your system keychain.
 
 ---
 
 ## Data Privacy
 
 - **What goes to Gemini AI**: Only the text of individual checkbox items (e.g., `"@jordan review the API spec by Friday"`). Full document contents are **never** uploaded.
-- **What stays local**: OAuth tokens (`token.json`), credentials (`credentials.json`), and config are stored at `~/.gcal-organizer/` and never transmitted.
+- **What stays local**: OAuth tokens (stored securely in system keychain), credentials (`credentials.json`), and config are stored locally and never transmitted.
 - **Scopes are minimal**: The app requests only the scopes it needs (see table above).
 - **Offline access**: The token includes refresh capability for long-running use.
 

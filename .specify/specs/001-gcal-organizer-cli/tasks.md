@@ -197,4 +197,5 @@ Once Phase 2 complete, these can run in parallel:
 - Test files should be created alongside implementation
 - Commit after each task or logical group
 - Use `--dry-run` extensively during development to avoid side effects
-- OAuth tokens stored in `~/.gcal-organizer/token.json`
+- OAuth tokens stored securely in system keychain (macOS Keychain, Linux Secret Service/gnome-keyring, Windows Credential Manager)
+- Authentication fails with setup instructions if keychain unavailable (no insecure fallback)

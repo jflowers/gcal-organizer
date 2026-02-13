@@ -127,11 +127,13 @@ As a user, I want to authenticate with Google Workspace APIs via OAuth2 and chec
 
 **Acceptance Scenarios**:
 
-1. **Given** no token exists, **When** I run `gcal-organizer auth login`, **Then** a browser opens for OAuth flow and token is saved locally.
+1. **Given** no token exists, **When** I run `gcal-organizer auth login`, **Then** a browser opens for OAuth flow and token is saved securely in system keychain.
 
-2. **Given** a valid token exists, **When** I run `gcal-organizer auth status`, **Then** output shows "✅ OAuth token found (authenticated)".
+2. **Given** a valid token exists, **When** I run `gcal-organizer auth status`, **Then** output shows "✅ OAuth token found (authenticated)" and indicates keychain storage location.
 
 3. **Given** an expired token, **When** I run `gcal-organizer auth status`, **Then** output shows "⚠️ Token expired" with instructions to re-authenticate.
+
+4. **Given** system keychain is unavailable, **When** I run `gcal-organizer auth login`, **Then** authentication fails with platform-specific instructions to configure keychain access.
 
 ---
 
@@ -169,6 +171,12 @@ As a user, I want to view my current configuration to verify settings are correc
 ### Functional Requirements
 
 - **FR-001**: System MUST authenticate with Google Workspace APIs using OAuth2 (Drive, Docs, Calendar)
+- **FR-001a**: System MUST store OAuth tokens securely using platform-native keychain/credential manager:
+  - macOS: Keychain
+  - Linux: Secret Service API (gnome-keyring, KWallet)
+  - Windows: Windows Credential Manager
+- **FR-001b**: System MUST NOT store tokens in plain text files
+- **FR-001c**: If keychain is unavailable, system MUST fail with clear instructions to configure keychain access for the user's platform
 - **FR-002**: System MUST parse document names using configurable regex pattern (default: `(.+) - (\d{4}-\d{2}-\d{2})`)
 - **FR-003**: System MUST create subfolders based on extracted meeting names
 - **FR-004**: System MUST move owned documents and create shortcuts for non-owned documents
@@ -212,7 +220,15 @@ As a user, I want to view my current configuration to verify settings are correc
 
 ## Clarifications
 
-*To be filled in during /speckit.clarify phase*
+### Security Improvements
+
+**Token Storage Security** (Updated 2026-02-09):
+- **Previous Implementation**: Tokens stored in plain text at `~/.gcal-organizer/token.json` (file permissions: 0600)
+- **Current Implementation**: Tokens stored securely in platform-native keychain (see FR-001a, FR-001b, FR-001c)
+- **Migration Path**: On first run after upgrade, existing `token.json` is automatically migrated to keychain and plain text file is deleted
+- **Library Used**: `github.com/zalando/go-keyring` - supports macOS Keychain, Linux Secret Service, Windows Credential Manager
+- **No Fallback**: If keychain is unavailable, authentication fails with clear setup instructions (no weak encryption fallback)
+- **Status**: ✅ Implemented - secure by design, no compromise on security
 
 ## Review & Acceptance Checklist
 
