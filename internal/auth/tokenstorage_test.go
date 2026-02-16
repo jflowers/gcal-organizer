@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -136,4 +137,147 @@ func TestTokenStorage_GetStorageLocation(t *testing.T) {
 
 	// Clean up
 	_ = ts.DeleteToken()
+}
+
+// mockTokenSource simulates oauth2.TokenSource behavior, including token refresh
+type mockTokenSource struct {
+	tokens      []*oauth2.Token
+	callCount   int
+	shouldError bool
+}
+
+func (m *mockTokenSource) Token() (*oauth2.Token, error) {
+	if m.shouldError {
+		return nil, fmt.Errorf("mock token error")
+	}
+
+	if m.callCount >= len(m.tokens) {
+		// Return last token for subsequent calls
+		return m.tokens[len(m.tokens)-1], nil
+	}
+
+	token := m.tokens[m.callCount]
+	m.callCount++
+	return token, nil
+}
+
+func TestPersistentTokenSource_RefreshPersistence(t *testing.T) {
+	// Create a test logger
+	logger := log.New(os.Stderr)
+	logger.SetLevel(log.ErrorLevel)
+
+	// Create token storage
+	ts := NewTokenStorage(logger)
+
+	// Clean up before test
+	_ = ts.DeleteToken()
+
+	// Create mock token source that simulates a token refresh
+	initialToken := &oauth2.Token{
+		AccessToken:  "initial-access-token",
+		RefreshToken: "refresh-token",
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(1 * time.Hour),
+	}
+
+	refreshedToken := &oauth2.Token{
+		AccessToken:  "refreshed-access-token", // Changed access token
+		RefreshToken: "refresh-token",          // Same refresh token
+		TokenType:    "Bearer",
+		Expiry:       time.Now().Add(1 * time.Hour),
+	}
+
+	mockSource := &mockTokenSource{
+		tokens: []*oauth2.Token{initialToken, refreshedToken},
+	}
+
+	// Create persistent token source
+	pts := &persistentTokenSource{
+		src:       mockSource,
+		storage:   ts,
+		logger:    logger,
+		lastToken: nil,
+	}
+
+	// First call - should save initial token
+	token1, err := pts.Token()
+	if err != nil {
+		t.Fatalf("First Token() call failed: %v", err)
+	}
+
+	if token1.AccessToken != "initial-access-token" {
+		t.Errorf("Expected initial token, got: %s", token1.AccessToken)
+	}
+
+	// Verify initial token was saved to keychain
+	savedToken, err := ts.LoadToken()
+	if err != nil {
+		// Skip test if keychain is unavailable
+		t.Logf("Keychain not available, skipping persistence test: %v", err)
+		return
+	}
+
+	if savedToken.AccessToken != "initial-access-token" {
+		t.Errorf("Initial token not saved to keychain. Got: %s", savedToken.AccessToken)
+	}
+
+	// Second call - should get refreshed token and save it
+	token2, err := pts.Token()
+	if err != nil {
+		t.Fatalf("Second Token() call failed: %v", err)
+	}
+
+	if token2.AccessToken != "refreshed-access-token" {
+		t.Errorf("Expected refreshed token, got: %s", token2.AccessToken)
+	}
+
+	// Verify refreshed token was persisted to keychain (FR-007)
+	savedToken, err = ts.LoadToken()
+	if err != nil {
+		t.Fatalf("Failed to load token from keychain: %v", err)
+	}
+
+	if savedToken.AccessToken != "refreshed-access-token" {
+		t.Errorf("Refreshed token not persisted to keychain. Got: %s, want: %s",
+			savedToken.AccessToken, "refreshed-access-token")
+	}
+
+	// Third call - should return same token without re-saving
+	token3, err := pts.Token()
+	if err != nil {
+		t.Fatalf("Third Token() call failed: %v", err)
+	}
+
+	if token3.AccessToken != "refreshed-access-token" {
+		t.Errorf("Expected same refreshed token, got: %s", token3.AccessToken)
+	}
+
+	// Clean up
+	_ = ts.DeleteToken()
+}
+
+func TestPersistentTokenSource_ErrorHandling(t *testing.T) {
+	// Create a test logger
+	logger := log.New(os.Stderr)
+	logger.SetLevel(log.ErrorLevel)
+
+	// Create token storage
+	ts := NewTokenStorage(logger)
+
+	// Create mock source that returns an error
+	mockSource := &mockTokenSource{
+		shouldError: true,
+	}
+
+	pts := &persistentTokenSource{
+		src:     mockSource,
+		storage: ts,
+		logger:  logger,
+	}
+
+	// Token() should propagate the error
+	_, err := pts.Token()
+	if err == nil {
+		t.Error("Expected error from Token(), got nil")
+	}
 }

@@ -55,8 +55,46 @@ func NewOAuthClient(credentialsFile string, logger *log.Logger) (*OAuthClient, e
 	}, nil
 }
 
+// persistentTokenSource wraps an oauth2.TokenSource and persists refreshed tokens to storage.
+// This ensures that when oauth2 automatically refreshes an expired token, the new token
+// is saved to the keychain (FR-007).
+type persistentTokenSource struct {
+	src       oauth2.TokenSource
+	storage   *TokenStorage
+	logger    *log.Logger
+	lastToken *oauth2.Token
+}
+
+// Token returns a valid token, refreshing if necessary, and persists any refreshed token.
+func (pts *persistentTokenSource) Token() (*oauth2.Token, error) {
+	token, err := pts.src.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if token was refreshed (access token changed)
+	// This happens when oauth2.TokenSource automatically refreshes an expired token
+	if pts.lastToken == nil || token.AccessToken != pts.lastToken.AccessToken {
+		pts.logger.Debug("Token refreshed, persisting to keychain")
+
+		// Save refreshed token to keychain
+		if err := pts.storage.SaveToken(token); err != nil {
+			// Log error but don't fail the request - the token refresh succeeded
+			// and the HTTP client can still use the in-memory token
+			pts.logger.Warn("Failed to persist refreshed token to keychain", "error", err)
+		} else {
+			pts.logger.Debug("Refreshed token persisted to keychain")
+		}
+
+		pts.lastToken = token
+	}
+
+	return token, nil
+}
+
 // GetClient returns an authenticated HTTP client.
 // If no cached token exists, it will prompt for authorization.
+// The client automatically refreshes expired tokens and persists them to the keychain.
 func (o *OAuthClient) GetClient(ctx context.Context) (*http.Client, error) {
 	if o.httpClient != nil {
 		return o.httpClient, nil
@@ -74,7 +112,19 @@ func (o *OAuthClient) GetClient(ctx context.Context) (*http.Client, error) {
 		}
 	}
 
-	o.httpClient = o.config.Client(ctx, tok)
+	// Create base token source with automatic refresh capability
+	baseSource := o.config.TokenSource(ctx, tok)
+
+	// Wrap with persistent token source to save refreshed tokens to keychain
+	persistentSource := &persistentTokenSource{
+		src:       baseSource,
+		storage:   o.tokenStorage,
+		logger:    o.logger,
+		lastToken: tok,
+	}
+
+	// Create HTTP client with the persistent token source
+	o.httpClient = oauth2.NewClient(ctx, persistentSource)
 	return o.httpClient, nil
 }
 
