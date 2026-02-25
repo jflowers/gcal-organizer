@@ -46,9 +46,19 @@ run:
 dry-run:
 	$(GOCMD) run $(BINARY_PATH) run --dry-run --verbose
 
-# Install the binary to GOPATH/bin and man page
+# Install the binary to ~/.local/bin, /usr/local/bin, or GOPATH/bin and man page
 install:
-	$(GOCMD) install -ldflags="$(LDFLAGS)" $(BINARY_PATH)
+	@if [ -d $(HOME)/.local/bin ] && [ -w $(HOME)/.local/bin ]; then \
+		$(GOBUILD) -ldflags="$(LDFLAGS)" -o $(HOME)/.local/bin/$(BINARY_NAME) $(BINARY_PATH); \
+		echo "Binary installed to $(HOME)/.local/bin/$(BINARY_NAME)"; \
+	elif [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then \
+		$(GOBUILD) -ldflags="$(LDFLAGS)" -o /usr/local/bin/$(BINARY_NAME) $(BINARY_PATH); \
+		echo "Binary installed to /usr/local/bin/$(BINARY_NAME)"; \
+	else \
+		$(GOCMD) install -ldflags="$(LDFLAGS)" $(BINARY_PATH); \
+		echo "Binary installed to $$(go env GOPATH)/bin/$(BINARY_NAME)"; \
+		echo "Note: Make sure $$(go env GOPATH)/bin is in your PATH"; \
+	fi
 	@if [ -d /usr/local/share/man/man1 ] && [ -w /usr/local/share/man/man1 ]; then \
 		cp man/gcal-organizer.1 /usr/local/share/man/man1/; \
 		echo "Man page installed to /usr/local/share/man/man1/"; \
