@@ -19,9 +19,9 @@ As a meeting organizer, I want decisions from my meetings automatically extracte
 
 1. **Given** a calendar event within the lookback window has a "Notes by Gemini" attachment containing a "Transcript" tab, **When** the workflow processes the event, **Then** a new "Decisions" tab is created in the same document with three sections: "Decisions Made", "Decisions Deferred", and "Open Items", each populated with relevant decisions extracted from the transcript.
 
-2. **Given** a calendar event within the lookback window has a standalone "Transcript" attachment (flat or tabbed document), **When** the workflow processes the event, **Then** a new "Decisions" tab is created in that document with the same three-section structure.
+2. **Given** a calendar event within the lookback window has an attachment whose title ends with "- Transcript" (e.g., "ComplyTime Standup - 2026/02/25 14:00 WET - Transcript"), **When** the workflow processes the event, **Then** a new "Decisions" tab is created in that document with the same three-section structure.
 
-3. **Given** a calendar event has both a "Notes by Gemini" and a standalone "Transcript" attachment, **When** the workflow processes the event, **Then** only the "Notes by Gemini" document is processed (deduplication).
+3. **Given** a calendar event has both a "Notes by Gemini" attachment and a "- Transcript" attachment, **When** the workflow processes the event, **Then** only the "Notes by Gemini" document is processed (deduplication).
 
 ---
 
@@ -95,12 +95,15 @@ As a cautious user, I want to preview what decisions would be extracted and whic
 - What happens when the transcript language is not English?
   - The AI processes the transcript in whatever language it is written in. Decision extraction quality depends on the AI model's multilingual capabilities.
 
+- What happens when two workflow instances process the same document concurrently?
+  - The system uses optimistic concurrency: it attempts to create the Decisions tab, and if the API rejects the request because a tab with that name already exists (created by the other instance), the system treats it as "already processed" and skips the document gracefully.
+
 ## Requirements *(mandatory)*
 
 ### Functional Requirements
 
-- **FR-001**: System MUST detect documents attached to calendar events with titles containing "Notes by Gemini" or "Transcript"
-- **FR-002**: System MUST deduplicate: when both a "Notes by Gemini" and a standalone "Transcript" document are attached to the same calendar event, only the "Notes by Gemini" document is processed
+- **FR-001**: System MUST detect documents attached to calendar events where the attachment title is exactly "Notes by Gemini" or ends with "- Transcript" (suffix match)
+- **FR-002**: System MUST deduplicate: when both a "Notes by Gemini" and a standalone "- Transcript" document are attached to the same calendar event, only the "Notes by Gemini" document is processed
 - **FR-003**: System MUST locate the "Transcript" tab within a multi-tab document, or use the document body content for flat/single-tab documents
 - **FR-004**: System MUST extract the full text content from the transcript, including all timestamp headings and their positions
 - **FR-005**: System MUST skip documents that already have a tab named "Decisions" (idempotency check)
@@ -116,6 +119,7 @@ As a cautious user, I want to preview what decisions would be extracted and whic
 - **FR-015**: System MUST process only documents attached to calendar events within the configured lookback window (`--days`)
 - **FR-016**: System MUST create a Decisions tab with a "No decisions identified" note when the AI finds no decisions in the transcript
 - **FR-017**: System MUST log a warning and skip the document when the AI call fails, allowing natural retry on subsequent runs
+- **FR-018**: System MUST handle concurrent processing gracefully: if tab creation fails because a "Decisions" tab was created by another instance, the system treats the document as already processed and skips it
 
 ### Assumptions
 
@@ -141,3 +145,10 @@ As a cautious user, I want to preview what decisions would be extracted and whic
 - **SC-005**: Users can review meeting decisions in under 1 minute by reading the Decisions tab, compared to 10+ minutes scanning the full transcript
 - **SC-006**: All existing workflow steps (organize, sync-calendar, assign-tasks) continue to function without regression
 - **SC-007**: The feature processes documents only within the configured lookback window, with zero documents processed outside that window
+
+## Clarifications
+
+### Session 2026-02-26
+
+- Q: How strict should title matching be for detecting transcript documents? → A: Attachment title must be exactly "Notes by Gemini" (exact match) or end with "- Transcript" (suffix match). Example: "ComplyTime Standup - 2026/02/25 14:00 WET - Transcript".
+- Q: How should the system handle concurrent processing of the same document? → A: Optimistic concurrency. Attempt tab creation; if the API rejects due to a duplicate tab name, treat as "already processed" and skip.
