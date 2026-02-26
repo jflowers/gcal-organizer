@@ -21,6 +21,13 @@ Any process or user with read access to `~/.gcal-organizer/` can exfiltrate thes
 
 Additionally, when the system refreshes an expired access token during a workflow run, the refreshed token is not persisted — it is lost when the process exits. This forces an unnecessary re-authentication round-trip on the next invocation.
 
+## Clarifications
+
+### Session 2026-02-26
+
+- Q: What should happen when `credentials.json` deletion prompt cannot be displayed (non-interactive context such as cron, launchd, CI)? → A: Skip deletion in non-interactive mode; log that manual cleanup is needed. The credentials are still stored in the credential store for security benefit.
+- Q: When migrating secrets from `.env`, which lines should be removed? → A: Remove both `GEMINI_API_KEY` and `GOOGLE_CREDENTIALS_FILE` lines, since both secrets are now in the credential store. Leave remaining non-secret configuration values intact.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 — Secure Token Storage (Priority: P1)
@@ -82,9 +89,10 @@ As an existing user upgrading to this version, I want my plaintext secrets autom
 **Acceptance Scenarios**:
 
 1. **Given** an existing `token.json` on disk, **When** the system starts, **Then** it auto-migrates the token to the credential store and deletes `token.json`.
-2. **Given** a Gemini API key in `.env`, **When** the system starts, **Then** it migrates the key to the credential store and removes the entry from `.env`.
+2. **Given** a Gemini API key and credentials file path in `.env`, **When** the system starts, **Then** it migrates the API key to the credential store and removes both the `GEMINI_API_KEY` and `GOOGLE_CREDENTIALS_FILE` entries from `.env` (preserving all other configuration values).
 3. **Given** an existing `credentials.json` on disk, **When** migration runs, **Then** it stores the contents in the credential store and **prompts the user** before deleting the file.
 4. **Given** migration has already completed, **When** the system starts again, **Then** no migration occurs and no errors are logged (idempotent).
+5. **Given** migration runs in a non-interactive context (cron, launchd, CI), **When** `credentials.json` exists on disk, **Then** the system stores the contents in the credential store but skips the deletion prompt, logging that manual cleanup is needed.
 
 ---
 
@@ -112,7 +120,7 @@ As a user running on a headless server without an OS credential store, I want th
 - How does the system handle token **refresh** persistence?
   - When the underlying OAuth2 library refreshes an expired access token, the new token must be saved back to the credential store immediately (not just held in memory).
 - What if `credentials.json` is **shared** across multiple projects?
-  - Never auto-delete `credentials.json`. Always prompt the user before removing it, explaining that other tools may depend on it.
+  - Never auto-delete `credentials.json`. Always prompt the user before removing it, explaining that other tools may depend on it. In non-interactive contexts, skip the deletion entirely and log that manual cleanup is needed.
 - What if migration is **interrupted** (e.g., crash after storing in credential store but before deleting file)?
   - The system must be idempotent: if a secret exists in both the credential store and on disk, it should treat the credential store version as authoritative and re-attempt cleanup on the next run.
 - What if the credential store has a **size limit** on stored values?
@@ -126,14 +134,14 @@ As a user running on a headless server without an OS credential store, I want th
 - **FR-002**: System MUST store the Gemini API key in the OS credential store by default.
 - **FR-003**: System MUST store the OAuth client credentials (`credentials.json` contents) in the OS credential store by default.
 - **FR-004**: System MUST auto-migrate existing plaintext secrets to the credential store on first run after upgrade (transparent to the user).
-- **FR-005**: System MUST delete `token.json` after successful migration. System MUST remove the API key entry from `.env` after successful migration. System MUST **prompt the user before deleting** `credentials.json` since it may be shared with other tools.
+- **FR-005**: System MUST delete `token.json` after successful migration. System MUST remove both the `GEMINI_API_KEY` and `GOOGLE_CREDENTIALS_FILE` entries from `.env` after successful migration (preserving all other configuration values in the file). System MUST **prompt the user before deleting** `credentials.json` since it may be shared with other tools.
 - **FR-006**: System MUST gracefully fall back to file-based storage when no credential store is available, logging a warning to the user.
 - **FR-007**: System MUST support a CLI flag and environment variable to opt out of credential store usage, forcing file-based storage.
 - **FR-008**: System MUST persist refreshed OAuth tokens back to the credential store (not only to memory) whenever the access token is renewed during a workflow run.
 - **FR-009**: The system health check command MUST report whether secrets are stored in the OS credential store or in plaintext files.
 - **FR-010**: System MUST read credentials from the credential store first, then fall back to file-based sources (environment variables, `.env` file, file on disk) if not found.
 - **FR-011**: Migration MUST be idempotent — running it multiple times produces the same result with no errors or data loss.
-- **FR-012**: System MUST NOT auto-delete `credentials.json` under any circumstances. Deletion requires explicit user confirmation via an interactive prompt.
+- **FR-012**: System MUST NOT auto-delete `credentials.json` under any circumstances. Deletion requires explicit user confirmation via an interactive prompt. In non-interactive contexts (e.g., cron, launchd, CI), the system MUST skip the deletion prompt and log that manual cleanup is needed.
 
 ### Configuration Requirements
 
