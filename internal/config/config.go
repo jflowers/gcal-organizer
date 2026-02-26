@@ -42,6 +42,9 @@ type Config struct {
 	// DryRun prevents making changes
 	DryRun bool
 
+	// OwnedOnly restricts mutations to files owned by the authenticated user
+	OwnedOnly bool
+
 	// ChromeProfilePath is the path to Chrome profile for browser automation
 	ChromeProfilePath string
 }
@@ -109,6 +112,7 @@ func Load() (*Config, error) {
 
 	cfg.Verbose = viper.GetBool("verbose")
 	cfg.DryRun = viper.GetBool("dry-run")
+	cfg.OwnedOnly = viper.GetBool("owned-only")
 
 	return cfg, nil
 }

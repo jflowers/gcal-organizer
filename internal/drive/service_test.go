@@ -48,6 +48,70 @@ func TestParseDocument_PrimaryPattern(t *testing.T) {
 	}
 }
 
+func TestParseDocument_IsOwned(t *testing.T) {
+	s := mockService()
+
+	tests := []struct {
+		name      string
+		owners    []*drive.User
+		wantOwned bool
+	}{
+		{
+			name:      "owned by current user",
+			owners:    []*drive.User{{EmailAddress: "test@example.com"}},
+			wantOwned: true,
+		},
+		{
+			name:      "owned by another user",
+			owners:    []*drive.User{{EmailAddress: "other@example.com"}},
+			wantOwned: false,
+		},
+		{
+			name:      "no owners (fail-safe)",
+			owners:    nil,
+			wantOwned: false,
+		},
+		{
+			name:      "empty owners list (fail-safe)",
+			owners:    []*drive.User{},
+			wantOwned: false,
+		},
+		{
+			name: "multiple owners, current user included",
+			owners: []*drive.User{
+				{EmailAddress: "other@example.com"},
+				{EmailAddress: "test@example.com"},
+			},
+			wantOwned: true,
+		},
+		{
+			name: "multiple owners, current user not included",
+			owners: []*drive.User{
+				{EmailAddress: "alice@example.com"},
+				{EmailAddress: "bob@example.com"},
+			},
+			wantOwned: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			file := &drive.File{
+				Name:   "Weekly Standup - 2026-02-06",
+				Id:     "test-id",
+				Owners: tt.owners,
+			}
+			doc, err := s.parseDocument(file)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if doc.IsOwned != tt.wantOwned {
+				t.Errorf("IsOwned = %v, want %v", doc.IsOwned, tt.wantOwned)
+			}
+		})
+	}
+}
+
 func TestParseDocument_FallbackPattern(t *testing.T) {
 	s := mockService()
 

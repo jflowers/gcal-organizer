@@ -76,6 +76,13 @@ Show what would be done without making any changes.
 .B \-v, \-\-verbose
 Enable detailed output.
 .TP
+.B \-\-owned-only
+Only mutate files you own; skip non-owned files. When active, non-owned
+documents are not moved, shared, or assigned tasks. Shortcuts are still
+created for discoverability. Can also be set via the
+.B GCAL_OWNED_ONLY
+environment variable or config file.
+.TP
 .B \-\-days \fIN\fR
 Number of days to look back for calendar events (default: 8).
 Available on
@@ -90,6 +97,9 @@ Path to config file (default: ~/.gcal-organizer/config.yaml).
 .TP
 .B GEMINI_API_KEY
 Required. GCP API key for Gemini AI.
+.TP
+.B GCAL_OWNED_ONLY
+When set to "true", only mutate files the authenticated user owns (default: false).
 .TP
 .B GCAL_MASTER_FOLDER_NAME
 Master folder name in Google Drive (default: "Meeting Notes").
@@ -174,6 +184,9 @@ Dry-run to preview changes:
 .TP
 Sync only the last 3 days of calendar events:
 .B gcal-organizer sync-calendar --days 3
+.TP
+Run with ownership protection (skip non-owned files):
+.B gcal-organizer run --owned-only --verbose
 .TP
 Assign tasks from a specific document:
 .B gcal-organizer assign-tasks --doc 1aBcDeFgHiJkLmNoPqRsTuVwXyZ

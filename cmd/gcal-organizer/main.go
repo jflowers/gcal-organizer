@@ -32,9 +32,10 @@ var (
 	Version = "dev"
 
 	// Global flags
-	cfgFile string
-	verbose bool
-	dryRun  bool
+	cfgFile   string
+	verbose   bool
+	dryRun    bool
+	ownedOnly bool
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -91,6 +92,7 @@ var runCmd = &cobra.Command{
 		}
 		cfg.DryRun = dryRun
 		cfg.Verbose = verbose
+		cfg.OwnedOnly = ownedOnly
 
 		days, _ := cmd.Flags().GetInt("days")
 		if days > 0 {
@@ -112,6 +114,9 @@ var runCmd = &cobra.Command{
 
 		// Step 3: Assign tasks from collected Notes documents
 		docIDs := org.GetNotesDocIDs()
+		if ownedOnly && len(docIDs) == 0 {
+			fmt.Println("📝 STEP 3: No owned Notes documents found for task assignment")
+		}
 		if len(docIDs) > 0 && !dryRun {
 			fmt.Println("📝 STEP 3: Assigning Tasks")
 			fmt.Println("───────────────────────────────────────────────────────────")
@@ -158,6 +163,7 @@ var organizeCmd = &cobra.Command{
 		}
 		cfg.DryRun = dryRun
 		cfg.Verbose = verbose
+		cfg.OwnedOnly = ownedOnly
 
 		org, err := initServices(ctx, cfg)
 		if err != nil {
@@ -196,6 +202,7 @@ var syncCalendarCmd = &cobra.Command{
 		}
 		cfg.DryRun = dryRun
 		cfg.Verbose = verbose
+		cfg.OwnedOnly = ownedOnly
 
 		org, err := initServices(ctx, cfg)
 		if err != nil {
@@ -240,10 +247,12 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gcal-organizer/.env)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would be done without making changes")
+	rootCmd.PersistentFlags().BoolVar(&ownedOnly, "owned-only", false, "only mutate files you own; skip non-owned files")
 
 	// Bind flags to viper
 	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
 	viper.BindPFlag("dry-run", rootCmd.PersistentFlags().Lookup("dry-run"))
+	viper.BindPFlag("owned-only", rootCmd.PersistentFlags().Lookup("owned-only"))
 
 	// Add flags to specific commands
 	syncCalendarCmd.Flags().Int("days", 8, "number of days to look back for calendar events")

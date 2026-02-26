@@ -111,6 +111,18 @@ export GEMINI_API_KEY="your-key-here"
 export MASTER_FOLDER_NAME="Meeting Notes"
 ```
 
+### Owned-Only Mode
+
+To always protect non-owned files from mutations, add to your `.env`:
+
+```bash
+GCAL_OWNED_ONLY=true
+```
+
+When active, gcal-organizer will only move, share, and assign tasks for files you own. Non-owned files still get shortcuts for discoverability. Override per-invocation with `--owned-only=false`.
+
+**Note**: Shared Drive files are treated as non-owned (the organization owns them). Do not enable this setting if your workflow depends on Shared Drive mutations.
+
 ---
 
 ## Step 6: Build and Authenticate

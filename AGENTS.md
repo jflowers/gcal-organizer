@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2026-02-17
 
 ## Active Technologies
+- Go 1.21+ + github.com/spf13/cobra (CLI), github.com/spf13/viper (config), Google Drive API v3 (006-owned-only-flag)
+- N/A (no new data persistence; flag stored in config file via existing viper mechanism) (006-owned-only-flag)
 
 - **Language**: Go 1.21+
 - **CLI Framework**: github.com/spf13/cobra
@@ -65,6 +67,7 @@ make install-hooks
 - New features require documentation before completion
 
 ## Recent Changes
+- 006-owned-only-flag: Added Go 1.21+ + github.com/spf13/cobra (CLI), github.com/spf13/viper (config), Google Drive API v3
 
 ### 001-gcal-organizer-cli
 Core CLI implementation with Google Workspace integration and Gemini AI for action item extraction.
@@ -91,8 +94,8 @@ Browser automation via Playwright for task assignment through Google Docs native
 ## Council Governance Protocol
 - **The Architect:** Must verify that "Intent Driving Implementation" is maintained.
 - **The Adversary:** Acts as the primary "Automated Governance" gate for security.
-- **The Guardian:** Detects "Intent Drift" to ensure the business value remains intact.
+- **The Guard:** Detects "Intent Drift" to ensure the business value remains intact.
 
-**Rule:** A Pull Request is only "Ready for Human" once all three commands return an **APPROVE** status.
+**Rule:** A Pull Request is only "Ready for Human" once the `/review-council` command returns an **APPROVE** status.
 
 <!-- MANUAL ADDITIONS END -->

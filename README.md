@@ -152,7 +152,27 @@ man gcal-organizer
 |------|-------------|
 | `--dry-run` | Show what would be done without making changes |
 | `--verbose` / `-v` | Detailed output |
+| `--owned-only` | Only mutate files you own; skip non-owned files |
 | `--days N` | Days to look back for calendar events (default: 8) |
+
+### Owned-Only Mode
+
+The `--owned-only` flag prevents gcal-organizer from modifying files you don't own. When active:
+
+- **Owned files**: Moved, shared, and processed normally
+- **Non-owned files**: Only shortcuts are created (no moves, shares, or task assignments)
+- Use `--verbose` to see which files are skipped and why
+- Combine with `--dry-run` to preview ownership filtering
+
+```bash
+# Run with ownership protection
+gcal-organizer run --owned-only --verbose
+
+# Preview what would be skipped
+gcal-organizer run --owned-only --dry-run --verbose
+```
+
+**Limitation**: Shared Drive files are treated as non-owned (the organization owns them). Do not use `--owned-only` if your workflow depends on Shared Drive mutations.
 
 ## 🔑 Configuration
 
@@ -165,6 +185,7 @@ GEMINI_API_KEY=your-gcp-api-key
 # Optional
 GCAL_MASTER_FOLDER_NAME="Meeting Notes"   # Default: "Meeting Notes"
 GCAL_DAYS_TO_LOOK_BACK=1                  # Default: 1
+GCAL_OWNED_ONLY=true                      # Default: false (only mutate owned files)
 GCAL_FILENAME_KEYWORDS="Notes,Meeting"    # Comma-separated
 GCAL_FILENAME_PATTERN="(.+)\s*-\s*(\d{4}-\d{2}-\d{2})"
 GEMINI_MODEL="gemini-1.5-flash"           # Default: gemini-1.5-flash
@@ -222,7 +243,7 @@ make help           # Show all targets
 
 ### Spec-Driven Development
 
-This project uses [Spec-Kit](https://github.com/github/spec-kit) for specification-driven development. Specs are in `.specify/specs/`:
+This project uses [Spec-Kit](https://github.com/github/spec-kit) for specification-driven development. Specs are in `specs/`:
 
 | Spec | Description |
 |------|-------------|

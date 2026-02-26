@@ -1,6 +1,6 @@
 # Tasks: GCal Organizer CLI
 
-**Input**: Design documents from `.specify/specs/001-gcal-organizer-cli/`
+**Input**: Design documents from `specs/001-gcal-organizer-cli/`
 **Prerequisites**: plan.md ✅, spec.md ✅
 
 ## Format: `[ID] [P?] [Story] Description`

@@ -19,6 +19,10 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.GeminiModel != "gemini-2.0-flash" {
 		t.Errorf("expected GeminiModel 'gemini-2.0-flash', got %s", cfg.GeminiModel)
 	}
+
+	if cfg.OwnedOnly != false {
+		t.Errorf("expected OwnedOnly false, got %v", cfg.OwnedOnly)
+	}
 }
 
 func TestLoadFromEnv(t *testing.T) {
@@ -43,6 +47,20 @@ func TestLoadFromEnv(t *testing.T) {
 
 	if cfg.GeminiAPIKey != "test-api-key" {
 		t.Errorf("expected GeminiAPIKey 'test-api-key', got %s", cfg.GeminiAPIKey)
+	}
+}
+
+func TestLoadOwnedOnlyFromEnv(t *testing.T) {
+	os.Setenv("GCAL_OWNED_ONLY", "true")
+	defer os.Unsetenv("GCAL_OWNED_ONLY")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if !cfg.OwnedOnly {
+		t.Errorf("expected OwnedOnly true when GCAL_OWNED_ONLY=true, got %v", cfg.OwnedOnly)
 	}
 }
 

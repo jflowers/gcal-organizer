@@ -123,9 +123,18 @@ func (s *Service) GetFileInfo(ctx context.Context, fileID string) (*models.Docum
 	if err != nil {
 		return nil, fmt.Errorf("failed to get file info: %w", err)
 	}
+	isOwned := false
+	for _, owner := range file.Owners {
+		if owner.EmailAddress == s.currentUserEmail {
+			isOwned = true
+			break
+		}
+	}
+
 	return &models.Document{
 		ID:          file.Id,
 		Name:        file.Name,
+		IsOwned:     isOwned,
 		WebViewLink: file.WebViewLink,
 	}, nil
 }
@@ -686,6 +695,28 @@ func (s *Service) ShareFile(ctx context.Context, fileID, fileName, email, role s
 		Skipped: false,
 		Details: fmt.Sprintf("Shared '%s' with %s", fileName, email),
 	}
+}
+
+// IsFileOwned checks if the current user is an owner of the given file.
+// Returns (true, nil) if owned, (false, nil) if not, (false, err) on API failure.
+func (s *Service) IsFileOwned(ctx context.Context, fileID string) (bool, error) {
+	var file *drive.File
+	err := retry.Do(ctx, retry.DefaultConfig(), func() error {
+		var e error
+		file, e = s.client.Files.Get(fileID).
+			Fields("owners").
+			Do()
+		return e
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to check file ownership: %w", err)
+	}
+	for _, owner := range file.Owners {
+		if owner.EmailAddress == s.currentUserEmail {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // CanEditFile checks if the current user owns or has editor access to the file.

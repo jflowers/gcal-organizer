@@ -43,7 +43,7 @@ Build a Go CLI tool that organizes Google Drive meeting documents, syncs calenda
 ### Documentation (this feature)
 
 ```text
-.specify/specs/001-gcal-organizer-cli/
+specs/001-gcal-organizer-cli/
 ├── spec.md              # Feature specification
 ├── plan.md              # This file
 ├── contracts/           # API contracts and interfaces

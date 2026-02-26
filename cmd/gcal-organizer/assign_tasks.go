@@ -15,6 +15,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/auth"
 	"github.com/jflowers/gcal-organizer/internal/config"
 	"github.com/jflowers/gcal-organizer/internal/docs"
+	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/gemini"
 	"github.com/jflowers/gcal-organizer/internal/ux"
 	"github.com/spf13/cobra"
@@ -47,6 +48,18 @@ Requires: Node.js and the browser/ directory to be set up.`,
 		}
 		cfg.DryRun = dryRun
 		cfg.Verbose = verbose
+		cfg.OwnedOnly = ownedOnly
+
+		// When --owned-only is active, verify ownership before processing
+		if ownedOnly {
+			owned, checkErr := checkDocOwnership(ctx, cfg, docID)
+			if checkErr != nil {
+				return fmt.Errorf("cannot verify ownership of document %s: %w\n\nRun 'gcal-organizer doctor' for diagnostics", docID, checkErr)
+			}
+			if !owned {
+				return fmt.Errorf("document %s is not owned by you; --owned-only prevents processing non-owned documents", docID)
+			}
+		}
 
 		if dryRun {
 			fmt.Println("═══════════════════════════════════════════════════════════")
@@ -61,6 +74,25 @@ Requires: Node.js and the browser/ directory to be set up.`,
 		}
 		return runAssignTasksBrowser(ctx, cfg, docID)
 	},
+}
+
+// checkDocOwnership initialises a Drive service and checks whether the
+// authenticated user owns the given document. Used by the assign-tasks
+// command to enforce --owned-only before any processing begins.
+func checkDocOwnership(ctx context.Context, cfg *config.Config, docID string) (bool, error) {
+	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+	if err != nil {
+		return false, fmt.Errorf("OAuth setup failed: %w", err)
+	}
+	httpClient, err := oauthClient.GetClient(ctx)
+	if err != nil {
+		return false, fmt.Errorf("authentication failed: %w", err)
+	}
+	driveSvc, err := drive.NewService(ctx, httpClient, cfg.FilenamePattern, cfg.DryRun, cfg.Verbose)
+	if err != nil {
+		return false, fmt.Errorf("failed to initialize Drive service: %w", err)
+	}
+	return driveSvc.IsFileOwned(ctx, docID)
 }
 
 // initDocsAndGemini is a shared helper that initialises the Docs service and

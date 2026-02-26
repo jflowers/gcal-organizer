@@ -7,11 +7,32 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/log"
-	"github.com/jflowers/gcal-organizer/internal/calendar"
 	"github.com/jflowers/gcal-organizer/internal/config"
 	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/logging"
+	"github.com/jflowers/gcal-organizer/pkg/models"
 )
+
+// DriveService defines the Drive operations used by the Organizer.
+type DriveService interface {
+	SetMasterFolder(ctx context.Context, folderName string) error
+	ListMeetingDocuments(ctx context.Context, keywords []string) ([]*models.Document, error)
+	GetOrCreateMeetingFolder(ctx context.Context, meetingName string) (*models.MeetingFolder, error)
+	CreateShortcut(ctx context.Context, fileID, fileName, targetFolderID, targetFolderName string, folderIsNew bool) drive.ActionResult
+	MoveDocument(ctx context.Context, docID, docName, currentParentID, targetFolderID, targetFolderName string) drive.ActionResult
+	FindShortcutToFile(ctx context.Context, targetFileID, folderID string) (string, error)
+	TrashFile(ctx context.Context, fileID, description string) drive.ActionResult
+	ShareFile(ctx context.Context, fileID, fileName, email, role string) drive.ActionResult
+	IsDryRun() bool
+	IsFileOwned(ctx context.Context, fileID string) (bool, error)
+	CanEditFile(ctx context.Context, fileID string) bool
+	GetFileName(ctx context.Context, fileID string) (string, error)
+}
+
+// CalendarService defines the Calendar operations used by the Organizer.
+type CalendarService interface {
+	ListRecentEvents(ctx context.Context, daysBack int) ([]*models.CalendarEvent, error)
+}
 
 // Stats tracks operation counts for summary reporting.
 type Stats struct {
@@ -24,14 +45,15 @@ type Stats struct {
 	AttachmentsShared int
 	TasksAssigned     int
 	TasksFailed       int
+	Skipped           int
 	Errors            int
 }
 
 // Organizer orchestrates all the services.
 type Organizer struct {
 	config   *config.Config
-	drive    *drive.Service
-	calendar *calendar.Service
+	drive    DriveService
+	calendar CalendarService
 	logger   *log.Logger
 
 	stats       Stats
@@ -39,7 +61,7 @@ type Organizer struct {
 }
 
 // New creates a new Organizer with all services initialized.
-func New(cfg *config.Config, driveSvc *drive.Service, calSvc *calendar.Service) *Organizer {
+func New(cfg *config.Config, driveSvc DriveService, calSvc CalendarService) *Organizer {
 	return &Organizer{
 		config:      cfg,
 		drive:       driveSvc,
@@ -104,6 +126,9 @@ func (o *Organizer) printSummary() {
 			"events_processed", o.stats.EventsProcessed,
 			"tasks_assigned", o.stats.TasksAssigned,
 		)
+		if o.stats.Skipped > 0 {
+			o.logger.Info("Would skip non-owned files (--owned-only active)", "count", o.stats.Skipped)
+		}
 		o.logger.Info("Dry run complete — no changes were made")
 	} else {
 		o.logger.Info("WORKFLOW SUMMARY",
@@ -122,6 +147,9 @@ func (o *Organizer) printSummary() {
 		}
 		if o.stats.TasksFailed > 0 {
 			o.logger.Warn("Task failures", "failed", o.stats.TasksFailed)
+		}
+		if o.stats.Skipped > 0 {
+			o.logger.Info("Skipped non-owned files (--owned-only active)", "count", o.stats.Skipped)
 		}
 		if o.stats.Errors > 0 {
 			o.logger.Warn("Errors encountered", "count", o.stats.Errors)
@@ -147,6 +175,26 @@ func (o *Organizer) OrganizeDocuments(ctx context.Context) error {
 	o.logger.Info("Found meeting documents", "count", len(documents))
 
 	for _, doc := range documents {
+		// Skip non-owned documents when --owned-only is active
+		if o.config.OwnedOnly && !doc.IsOwned {
+			o.stats.Skipped++
+			if o.config.DryRun {
+				o.logger.Info("Would skip non-owned document", "name", doc.Name)
+			} else if o.config.Verbose {
+				o.logger.Info("Skipping non-owned document", "name", doc.Name)
+			}
+			// Still create shortcut for discoverability (FR-005)
+			folder, err := o.drive.GetOrCreateMeetingFolder(ctx, doc.MeetingName)
+			if err != nil {
+				o.logger.Error("Failed to get/create folder", "meeting", doc.MeetingName, "err", err)
+				o.stats.Errors++
+				continue
+			}
+			result := o.drive.CreateShortcut(ctx, doc.ID, doc.Name, folder.ID, folder.Name, folder.IsNew)
+			o.logActionResult(result, false)
+			continue
+		}
+
 		// Get or create meeting folder
 		folder, err := o.drive.GetOrCreateMeetingFolder(ctx, doc.MeetingName)
 		if err != nil {
@@ -230,6 +278,13 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 			// Track Google Docs with "Notes" in the title for task assignment
 			if att.MimeType == "application/vnd.google-apps.document" &&
 				strings.Contains(strings.ToLower(title), "notes") {
+				// When --owned-only is active, only collect owned docs for Step 3
+				if o.config.OwnedOnly {
+					owned, err := o.drive.IsFileOwned(ctx, att.FileID)
+					if err != nil || !owned {
+						continue
+					}
+				}
 				o.notesDocIDs[att.FileID] = true
 			}
 		}
@@ -238,6 +293,20 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 		for _, att := range event.Attachments {
 			if att.FileID == "" {
 				continue
+			}
+
+			// When --owned-only is active, only share files we own
+			if o.config.OwnedOnly {
+				owned, err := o.drive.IsFileOwned(ctx, att.FileID)
+				if err != nil || !owned {
+					o.stats.Skipped++
+					if o.config.DryRun {
+						o.logger.Info("Would skip sharing non-owned attachment", "attachment", att.Title)
+					} else if o.config.Verbose {
+						o.logger.Info("Skipping share for non-owned attachment", "attachment", att.Title)
+					}
+					continue
+				}
 			}
 
 			// Only share if we have edit access to the attachment
