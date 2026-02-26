@@ -91,7 +91,7 @@ AGENTS.md                             # [MODIFY] Add 007 to recent changes
 
 - `SecretStore` interface: `Get(key string) (string, error)`, `Set(key, value string) error`, `Delete(key string) error`
 - `Backend` type: `BackendKeychain` | `BackendFile`
-- `NewStore(noKeyring bool) (SecretStore, Backend)` factory: if `noKeyring`, return `FileStore`; otherwise attempt `KeychainStore`, fall back to `FileStore` with logged warning
+- `NewStore(noKeyring bool) (SecretStore, Backend)` factory: if `noKeyring`, return `FileStore`; otherwise attempt `KeychainStore`, fall back to `FileStore` with logged warning. Uses `internal/logging.Logger` for backend selection messages (Info level) and fallback warnings (Warn level) — no explicit `verbose` parameter needed.
 - Well-known key constants: `KeyOAuthToken`, `KeyGeminiAPIKey`, `KeyClientCredentials`
 - Service name constant: `ServiceName = "com.jflowers.gcal-organizer"`
 
@@ -138,13 +138,15 @@ type persistingTokenSource struct {
 **`internal/config/config.go`**:
 
 - Add `NoKeyring bool` field
-- `Load()` checks keychain for `gemini-api-key` before env vars (when keychain available)
+- Add `LoadSecrets(store SecretStore) error` method — checks `store.Get(KeyGeminiAPIKey)`, overrides `GeminiAPIKey` if found, falls back to existing viper/env value if `ErrNotFound`. Called after `Load()` and `NewStore()` in the startup sequence. `Load()` signature remains unchanged.
+- Remove `ValidateForWorkflow()` — zero callers, and the `os.Stat` check on `CredentialsFile` would fail after keychain migration. Credential presence validation moves to `NewOAuthClient` (Phase 2).
 - Bind `GCAL_NO_KEYRING` env var
 
 **`cmd/gcal-organizer/main.go`**:
 
 - Add `--no-keyring` persistent flag on root
 - Wire `SecretStore` creation in `initServices()` / command `RunE` functions
+- Startup flow: `cfg := config.Load()` → `store := secrets.NewStore(cfg.NoKeyring)` → `cfg.LoadSecrets(store)`
 
 ### Phase 4: Auto-Migration (FR-004, FR-005, FR-011, FR-012)
 

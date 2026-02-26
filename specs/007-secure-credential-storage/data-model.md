@@ -56,6 +56,10 @@ Returned by `NewStore()` alongside the `SecretStore` instance. Used by `doctor` 
 
 Existing fields `CredentialsFile` and `TokenFile` become fallback paths — only used when `FileStore` is active.
 
+**New method**: `LoadSecrets(store SecretStore) error` — enriches the config with secrets from the credential store. Checks `store.Get(KeyGeminiAPIKey)` and overrides `GeminiAPIKey` if found; falls back to existing viper/env value if `ErrNotFound`. Called after `Load()` and `NewStore()` in the startup sequence.
+
+**Removed method**: `ValidateForWorkflow()` — removed (zero callers in codebase). The `os.Stat` check on `CredentialsFile` would fail after credentials are migrated to keychain. Credential presence validation is now handled by `NewOAuthClient`, which checks the store first, then the file fallback.
+
 #### OAuthClient (`internal/auth/oauth.go`)
 
 | Field | Change | Notes |
@@ -85,15 +89,14 @@ No changes. Migration runs before orchestration; no new stats counters needed.
 
 ## New Functions
 
-### `NewStore(noKeyring bool, verbose bool) (SecretStore, Backend)`
+### `NewStore(noKeyring bool) (SecretStore, Backend)`
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `noKeyring` | `bool` | If true, skip keychain detection and return FileStore |
-| `verbose` | `bool` | If true, log which backend was selected |
 | **Returns** | `(SecretStore, Backend)` | The active store and its backend type |
 
-**Behavior**: If `noKeyring` is false, attempt a probe write/read/delete to the keychain. If the probe succeeds, return `KeychainStore`. If it fails (keyring unavailable, locked, denied), log a warning and return `FileStore`.
+**Behavior**: If `noKeyring` is false, attempt a probe write/read/delete to the keychain. If the probe succeeds, return `KeychainStore`. If it fails (keyring unavailable, locked, denied), log a warning and return `FileStore`. Logging uses the shared `internal/logging` logger — backend selection is logged at Info level, fallback warnings at Warn level. The logger respects `--verbose` via its configured level.
 
 ### `Migrate(store SecretStore, configDir string, interactive bool, verbose bool) error`
 
@@ -113,13 +116,16 @@ No changes. Migration runs before orchestration; no new stats counters needed.
 CLI startup
     │
     ├── config.Load()
-    │     └── Read NoKeyring from flag/env
+    │     └── Read NoKeyring from flag/env (no secrets yet)
     │
-    ├── secrets.NewStore(noKeyring, verbose)
+    ├── secrets.NewStore(cfg.NoKeyring)
     │     ├── noKeyring=true → FileStore
     │     └── noKeyring=false
     │           ├── probe keychain → success → KeychainStore
     │           └── probe keychain → fail → FileStore + warning
+    │
+    ├── cfg.LoadSecrets(store)
+    │     └── store.Get(KeyGeminiAPIKey) → override cfg.GeminiAPIKey (or keep env fallback)
     │
     ├── secrets.Migrate(store, configDir, isInteractive, verbose)
     │     ├── token.json on disk? → store.Set(KeyOAuthToken) → delete file
@@ -138,8 +144,8 @@ CLI startup
     │     └── config.Client(ctx, tok) with persistingTokenSource
     │           └── on refresh → store.Set(KeyOAuthToken)
     │
-    └── config.Load() / gemini.NewClient()
-          └── store.Get(KeyGeminiAPIKey) || env var fallback
+    └── gemini.NewClient(cfg.GeminiAPIKey)
+          └── (API key already loaded via cfg.LoadSecrets)
 ```
 
 ## State Transitions
