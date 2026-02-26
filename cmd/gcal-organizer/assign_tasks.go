@@ -17,6 +17,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/docs"
 	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/gemini"
+	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/jflowers/gcal-organizer/internal/ux"
 	"github.com/spf13/cobra"
 )
@@ -35,14 +36,15 @@ This command:
 
 Requires: Node.js and the browser/ directory to be set up.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 
 		docID, _ := cmd.Flags().GetString("doc")
 		if docID == "" {
 			return fmt.Errorf("--doc flag is required")
 		}
 
-		cfg, err := config.Load()
+		cfg, store, _, err := loadConfigAndStore()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
@@ -52,7 +54,7 @@ Requires: Node.js and the browser/ directory to be set up.`,
 
 		// When --owned-only is active, verify ownership before processing
 		if ownedOnly {
-			owned, checkErr := checkDocOwnership(ctx, cfg, docID)
+			owned, checkErr := checkDocOwnership(ctx, cfg, store, docID)
 			if checkErr != nil {
 				return fmt.Errorf("cannot verify ownership of document %s: %w\n\nRun 'gcal-organizer doctor' for diagnostics", docID, checkErr)
 			}
@@ -70,17 +72,17 @@ Requires: Node.js and the browser/ directory to be set up.`,
 		fmt.Printf("📄 Processing document: %s\n\n", docID)
 
 		if dryRun {
-			return runAssignTasksDryRun(ctx, cfg, docID)
+			return runAssignTasksDryRun(ctx, cfg, store, docID)
 		}
-		return runAssignTasksBrowser(ctx, cfg, docID)
+		return runAssignTasksBrowser(ctx, cfg, store, docID)
 	},
 }
 
 // checkDocOwnership initialises a Drive service and checks whether the
 // authenticated user owns the given document. Used by the assign-tasks
 // command to enforce --owned-only before any processing begins.
-func checkDocOwnership(ctx context.Context, cfg *config.Config, docID string) (bool, error) {
-	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+func checkDocOwnership(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) (bool, error) {
+	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
 	if err != nil {
 		return false, fmt.Errorf("OAuth setup failed: %w", err)
 	}
@@ -97,8 +99,8 @@ func checkDocOwnership(ctx context.Context, cfg *config.Config, docID string) (b
 
 // initDocsAndGemini is a shared helper that initialises the Docs service and
 // Gemini client, both of which are required by every assign-tasks flow.
-func initDocsAndGemini(ctx context.Context, cfg *config.Config) (*docs.Service, *gemini.Client, error) {
-	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+func initDocsAndGemini(ctx context.Context, cfg *config.Config, store secrets.SecretStore) (*docs.Service, *gemini.Client, error) {
+	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
 	if err != nil {
 		return nil, nil, ux.OAuthSetupFailed(cfg.CredentialsFile)
 	}
@@ -131,8 +133,8 @@ func extractUnassignedItems(checkboxes []*docs.CheckboxItem) []gemini.CheckboxIt
 }
 
 // runAssignTasksDryRun analyses a document and prints what would be assigned.
-func runAssignTasksDryRun(ctx context.Context, cfg *config.Config, docID string) error {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg)
+func runAssignTasksDryRun(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) error {
+	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
 	if err != nil {
 		return err
 	}
@@ -193,8 +195,8 @@ type scriptOutput struct {
 }
 
 // runAssignTasksBrowser extracts assignees then invokes the Playwright script.
-func runAssignTasksBrowser(ctx context.Context, cfg *config.Config, docID string) error {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg)
+func runAssignTasksBrowser(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) error {
+	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
 	if err != nil {
 		return err
 	}
@@ -362,8 +364,8 @@ func findBrowserDir() (string, error) {
 
 // runAssignTasksForDoc scans a document for unassigned checkboxes and runs
 // browser automation to assign them. Returns (assigned, failed, error).
-func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, docID string) (int, int, error) {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg)
+func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) (int, int, error) {
+	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
 	if err != nil {
 		return 0, 0, err
 	}

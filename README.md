@@ -5,19 +5,20 @@
 [![GitHub release](https://img.shields.io/github/v/release/jflowers/gcal-organizer)](https://github.com/jflowers/gcal-organizer/releases/latest)
 [![License](https://img.shields.io/github/license/jflowers/gcal-organizer)](LICENSE)
 
-A Go CLI tool that automates meeting note organization, calendar attachment syncing, and AI-powered task assignment using Google Workspace APIs and Gemini AI.
+A Go CLI tool that automates meeting note organization, calendar attachment syncing, AI-powered task assignment, and decision extraction using Google Workspace APIs and Gemini AI.
 
 ## ✨ What It Does
 
-GCal Organizer runs a 3-step workflow that keeps your Google Drive and Calendar in sync:
+GCal Organizer runs a 4-step workflow that keeps your Google Drive and Calendar in sync:
 
 | Step | Command | Description |
 |------|---------|-------------|
 | 1 | `organize` | Finds meeting docs in Drive and organizes them into topic-based folders |
 | 2 | `sync-calendar` | Links calendar attachments to meeting folders, shares with attendees |
 | 3 | `assign-tasks` | Locates checkbox action items in Google Docs `Notes by Gemini` and assigns them if Gemini can determine the assignee  |
+| 4 | *(automatic)* | Extracts decisions from meeting transcripts and creates a "Decisions" tab with categorized sections |
 
-Run all three with `gcal-organizer run`, or each step individually.
+Run all four with `gcal-organizer run`, or steps 1-3 individually.
 
 ### How the Folder Routing Works
 
@@ -134,7 +135,7 @@ man gcal-organizer
 
 | Command | Description |
 |---------|-------------|
-| `gcal-organizer run` | Run the full 3-step workflow |
+| `gcal-organizer run` | Run the full 4-step workflow |
 | `gcal-organizer organize` | Step 1 only: organize documents into folders |
 | `gcal-organizer sync-calendar` | Step 2 only: sync calendar attachments |
 | `gcal-organizer assign-tasks --doc <ID>` | Step 3 only: assign tasks from a specific doc |
@@ -188,14 +189,32 @@ GCAL_DAYS_TO_LOOK_BACK=1                  # Default: 1
 GCAL_OWNED_ONLY=true                      # Default: false (only mutate owned files)
 GCAL_FILENAME_KEYWORDS="Notes,Meeting"    # Comma-separated
 GCAL_FILENAME_PATTERN="(.+)\s*-\s*(\d{4}-\d{2}-\d{2})"
-GEMINI_MODEL="gemini-1.5-flash"           # Default: gemini-1.5-flash
+GEMINI_MODEL="gemini-2.0-flash"           # Default: gemini-2.0-flash
 ```
 
 ## 🔒 Data Privacy
 
-**What goes to Gemini AI**: Only the text of individual checkbox items (e.g., `"@jordan review the API spec by Friday"`). The tool does *not* upload full document contents — it extracts checkbox text via the Google Docs API and sends only that single line to Gemini for assignee extraction.
+**What goes to Gemini AI**: Individual checkbox items for task assignment (e.g., `"@jordan review the API spec by Friday"`) and full transcript text for decision extraction. The tool does *not* upload entire documents for task assignment — it extracts checkbox text via the Google Docs API. For decision extraction (Step 4), the full transcript tab content is sent to Gemini for analysis.
 
-**What stays local**: OAuth tokens, credentials, and configuration are stored at `~/.gcal-organizer/` and never transmitted.
+**What stays local**: OAuth tokens, credentials, and configuration are stored securely and never transmitted.
+
+### Secure Credential Storage
+
+By default, OAuth tokens, the Gemini API key, and client credentials are stored in your OS credential store (macOS Keychain or Linux Secret Service). This prevents sensitive data from being stored as plaintext files on disk.
+
+| Data | Default Storage | Fallback |
+|------|----------------|----------|
+| OAuth token | OS keychain | `~/.gcal-organizer/token.json` |
+| Gemini API key | OS keychain | `~/.gcal-organizer/.env` |
+| Client credentials | OS keychain | `~/.gcal-organizer/credentials.json` |
+
+To disable keychain storage (e.g., on headless servers without a credential store):
+
+```bash
+gcal-organizer run --no-keyring
+# or
+export GCAL_NO_KEYRING=true
+```
 
 ## 🤖 Why Browser Automation for Task Assignment?
 
@@ -208,6 +227,22 @@ The Google Docs API provides read access to document content (including checkbox
 
 This requires Chrome with your Google profile for authentication. See [Browser Automation Setup](docs/SETUP.md#browser-automation-setup) for details.
 
+## 📋 Step 4: Decision Extraction
+
+Step 4 automatically processes meeting transcript documents to extract and categorize decisions:
+
+1. During calendar sync (Step 2), the tool identifies documents titled "Notes by Gemini" (exact match) or ending with "- Transcript" (suffix match)
+2. For each eligible document, it reads the transcript content and sends it to Gemini AI
+3. Gemini extracts decisions into three categories:
+   - **Decisions Made** -- commitments the team agreed on
+   - **Decisions Deferred** -- items explicitly tabled for later
+   - **Open Items** -- unresolved topics needing further discussion
+4. A new "Decisions" tab is created in the document with clickable timestamp links back to the transcript
+
+**Idempotent**: Documents with an existing "Decisions" tab are automatically skipped. Safe to run repeatedly.
+
+**Error handling**: If Gemini fails on a document, it's skipped with a warning. The next run will retry since no tab was created.
+
 ## 📁 Project Structure
 
 ```
@@ -217,11 +252,10 @@ gcal-organizer/
 │   ├── auth/                  # OAuth2 + Gemini API auth
 │   ├── calendar/              # Calendar event operations
 │   ├── config/                # Configuration management
-│   ├── docs/                  # Docs checkbox extraction
+│   ├── docs/                  # Docs checkbox extraction + decision tab creation
 │   ├── drive/                 # Drive folder/file operations
-│   ├── gemini/                # Gemini AI assignee extraction
-│   ├── organizer/             # Workflow orchestration
-│   └── tasks/                 # Google Tasks creation
+│   ├── gemini/                # Gemini AI assignee + decision extraction
+│   └── organizer/             # Workflow orchestration
 ├── browser/                   # Playwright task assignment script (TypeScript)
 ├── deploy/                    # Service files (launchd, systemd)
 ├── .specify/                  # Spec-kit artifacts

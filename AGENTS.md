@@ -26,13 +26,13 @@ gcal-organizer/
 │   ├── auth/                    # OAuth2 and API key handling
 │   ├── config/                  # Configuration management
 │   ├── drive/                   # Google Drive operations
-│   ├── docs/                    # Google Docs parsing
+│   ├── docs/                    # Google Docs parsing + Decisions tab creation
 │   ├── calendar/                # Calendar operations
 │   ├── gemini/                  # Gemini AI client
 │   ├── secrets/                 # Credential storage abstraction (keychain/file)
 │   └── organizer/               # Main orchestration
 ├── pkg/models/                  # Shared data models
-├── scripts/                     # Browser automation (TypeScript)
+├── browser/                     # Browser automation (TypeScript)
 ├── .specify/                    # Spec-driven development artifacts
 └── .opencode/                   # OpenCode agent commands
 ```

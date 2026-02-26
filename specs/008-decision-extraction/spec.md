@@ -2,7 +2,7 @@
 
 **Feature Branch**: `008-decision-extraction`  
 **Created**: 2026-02-26  
-**Status**: Draft  
+**Status**: Implemented  
 **Input**: User description: "For all docs named ~'Notes by Gemini', with a 'Transcript' tab, add a tab named 'Decisions' with Gemini-extracted decisions linked to transcript timestamps. For all docs named ~'Transcript', add a 'Decisions' tab with the same."
 
 ## User Scenarios & Testing *(mandatory)*

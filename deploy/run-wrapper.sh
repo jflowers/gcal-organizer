@@ -12,9 +12,6 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
-# Override days to look back for service mode (1 day)
-export GCAL_DAYS_TO_LOOK_BACK=1
-
 # --- Log rotation (FR-016) ---
 # Rotate log when it exceeds 5 MB, keeping one backup (.1).
 # Max disk usage: ~10 MB (5 MB active + 5 MB rotated).
@@ -44,9 +41,8 @@ else
     fi
 fi
 
-# Change to project root so browser/ directory is found
-cd /Users/jflowers/Projects/github/jflowers/gcal-organizer
-
 echo "$(date '+%Y-%m-%d %H:%M:%S') — Starting gcal-organizer run"
-"$BINARY" run #--verbose
+echo "$BINARY run"
+"$BINARY" run
+echo "Exit code: $?"
 echo "$(date '+%Y-%m-%d %H:%M:%S') — Completed gcal-organizer run"

@@ -14,6 +14,7 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/spf13/cobra"
 	"golang.org/x/oauth2"
 )
@@ -113,33 +114,57 @@ var doctorCmd = &cobra.Command{
 			failed++
 		}
 
-		// 4. token.json (OAuth token)
+		// 4. OAuth token (check store first, then file fallback)
 		tokenFile := filepath.Join(configDir, "token.json")
-		if _, err := os.Stat(tokenFile); err == nil {
-			// Check if token is valid
-			f, err := os.Open(tokenFile)
-			if err == nil {
-				defer f.Close()
-				var tok oauth2.Token
-				if err := json.NewDecoder(f).Decode(&tok); err == nil {
-					if tok.Expiry.After(time.Now()) || tok.RefreshToken != "" {
-						fmt.Println(styledPass("OAuth token found (authenticated)"))
-						if verbose {
-							fmt.Println(subtleStyle.Render("          " + tokenFile))
-						}
-						passed++
-					} else {
-						fmt.Println(styledWarn("OAuth token exists but may be expired"))
-						fmt.Println(styledFix("Run 'gcal-organizer auth login' to re-authenticate"))
-						warned++
-					}
+		tokenFound := false
+		// Try the secret store first (keychain or file-based)
+		store, backend := secrets.NewStore(false)
+		if tokData, tokErr := store.Get(secrets.KeyOAuthToken); tokErr == nil && tokData != "" {
+			var tok oauth2.Token
+			if err := json.Unmarshal([]byte(tokData), &tok); err == nil {
+				if tok.Expiry.After(time.Now()) || tok.RefreshToken != "" {
+					fmt.Println(styledPass(fmt.Sprintf("OAuth token found (%s)", backend)))
+					passed++
+					tokenFound = true
 				} else {
-					fmt.Println(styledWarn("OAuth token file is corrupted"))
+					fmt.Println(styledWarn("OAuth token exists but may be expired"))
 					fmt.Println(styledFix("Run 'gcal-organizer auth login' to re-authenticate"))
 					warned++
+					tokenFound = true
 				}
 			}
-		} else {
+		}
+		// Fallback: check token.json on disk
+		if !tokenFound {
+			if _, err := os.Stat(tokenFile); err == nil {
+				f, err := os.Open(tokenFile)
+				if err == nil {
+					defer f.Close()
+					var tok oauth2.Token
+					if err := json.NewDecoder(f).Decode(&tok); err == nil {
+						if tok.Expiry.After(time.Now()) || tok.RefreshToken != "" {
+							fmt.Println(styledPass("OAuth token found (file)"))
+							if verbose {
+								fmt.Println(subtleStyle.Render("          " + tokenFile))
+							}
+							passed++
+							tokenFound = true
+						} else {
+							fmt.Println(styledWarn("OAuth token exists but may be expired"))
+							fmt.Println(styledFix("Run 'gcal-organizer auth login' to re-authenticate"))
+							warned++
+							tokenFound = true
+						}
+					} else {
+						fmt.Println(styledWarn("OAuth token file is corrupted"))
+						fmt.Println(styledFix("Run 'gcal-organizer auth login' to re-authenticate"))
+						warned++
+						tokenFound = true
+					}
+				}
+			}
+		}
+		if !tokenFound {
 			fmt.Println(styledFail("Not authenticated — no OAuth token found"))
 			fmt.Println(styledFix("Run 'gcal-organizer auth login'"))
 			failed++
@@ -905,7 +930,10 @@ This command:
 		fmt.Println()
 
 		reader := bufio.NewReader(os.Stdin)
-		reader.ReadString('\n')
+		if _, err := reader.ReadString('\n'); err != nil {
+			// Non-interactive (stdin closed) — continue without waiting
+			fmt.Println(styledWarn("stdin not available — skipping interactive pause"))
+		}
 
 		// Verify CDP is accessible
 		if isPortOpen(9222) {

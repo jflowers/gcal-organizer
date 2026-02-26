@@ -61,11 +61,11 @@
 
 ### Implementation
 
-- [ ] T013 [US1] Refactor `OAuthClient` in `internal/auth/oauth.go`: replace `tokenFile string` field with `store secrets.SecretStore` field. Add `credsFallbackPath string` field. Update `NewOAuthClient` signature to `NewOAuthClient(store secrets.SecretStore, credsFallbackPath string) (*OAuthClient, error)` — load client credentials from `store.Get(KeyClientCredentials)` first, fall back to reading `credsFallbackPath` file. Parse credentials via `google.ConfigFromJSON(bytes, Scopes...)`. If neither source has credentials, return an actionable error referencing `auth login` and `doctor` (Constitution Principle VII). Also remove `ValidateForWorkflow()` from `internal/config/config.go` (dead code — zero callers; its `os.Stat` check would fail after keychain migration).
-- [ ] T014 [US1] Rewrite `loadToken()` in `internal/auth/oauth.go` to call `o.store.Get(secrets.KeyOAuthToken)` and JSON-unmarshal the result. Rewrite `saveToken()` to JSON-marshal and call `o.store.Set(secrets.KeyOAuthToken, ...)`.
-- [ ] T015 [US1] Implement `persistingTokenSource` struct in `internal/auth/oauth.go` — fields: `base oauth2.TokenSource`, `store secrets.SecretStore`, `current *oauth2.Token`, `mu sync.Mutex`. `Token()` method: call `base.Token()`, compare `AccessToken` and `Expiry` with `current`, if different call `saveToken` equivalent via `store.Set`, update `current`, return token. Per research.md R3.
-- [ ] T016 [US1] Update `GetClient()` in `internal/auth/oauth.go` to wrap the `oauth2.Config.TokenSource(ctx, tok)` with `persistingTokenSource` before creating `oauth2.NewClient(ctx, persistingTS)`.
-- [ ] T017 [US1] Update all callers of `NewOAuthClient` in `cmd/gcal-organizer/` — pass the `SecretStore` instance and `cfg.CredentialsFile` as fallback path. Update `auth_config.go` (`auth login`, `auth status`) and any command `RunE` functions that create an `OAuthClient`.
+- [x] T013 [US1] Refactor `OAuthClient` in `internal/auth/oauth.go`: replace `tokenFile string` field with `store secrets.SecretStore` field. Add `credsFallbackPath string` field. Update `NewOAuthClient` signature to `NewOAuthClient(store secrets.SecretStore, credsFallbackPath string) (*OAuthClient, error)` — load client credentials from `store.Get(KeyClientCredentials)` first, fall back to reading `credsFallbackPath` file. Parse credentials via `google.ConfigFromJSON(bytes, Scopes...)`. If neither source has credentials, return an actionable error referencing `auth login` and `doctor` (Constitution Principle VII). Also remove `ValidateForWorkflow()` from `internal/config/config.go` (dead code — zero callers; its `os.Stat` check would fail after keychain migration).
+- [x] T014 [US1] Rewrite `loadToken()` in `internal/auth/oauth.go` to call `o.store.Get(secrets.KeyOAuthToken)` and JSON-unmarshal the result. Rewrite `saveToken()` to JSON-marshal and call `o.store.Set(secrets.KeyOAuthToken, ...)`.
+- [x] T015 [US1] Implement `persistingTokenSource` struct in `internal/auth/oauth.go` — fields: `base oauth2.TokenSource`, `store secrets.SecretStore`, `current *oauth2.Token`, `mu sync.Mutex`. `Token()` method: call `base.Token()`, compare `AccessToken` and `Expiry` with `current`, if different call `saveToken` equivalent via `store.Set`, update `current`, return token. Per research.md R3.
+- [x] T016 [US1] Update `GetClient()` in `internal/auth/oauth.go` to wrap the `oauth2.Config.TokenSource(ctx, tok)` with `persistingTokenSource` before creating `oauth2.NewClient(ctx, persistingTS)`.
+- [x] T017 [US1] Update all callers of `NewOAuthClient` in `cmd/gcal-organizer/` — pass the `SecretStore` instance and `cfg.CredentialsFile` as fallback path. Update `auth_config.go` (`auth login`, `auth status`) and any command `RunE` functions that create an `OAuthClient`.
 - [ ] T018 [US1] Run `go test ./internal/auth/... ./internal/secrets/...` and verify T010-T012 pass. Run `go build ./...` to verify no compilation errors across the project.
 
 **Checkpoint**: OAuth tokens are stored in and loaded from the SecretStore. Token refresh is persisted. `auth login` and `auth status` work with the new backend.
@@ -85,9 +85,9 @@
 
 ### Implementation
 
-- [ ] T021 [US2] Add `LoadSecrets(store secrets.SecretStore) error` method to `*Config` in `internal/config/config.go`. Check `store.Get(secrets.KeyGeminiAPIKey)` — if found, override `c.GeminiAPIKey` with the keychain value. If `ErrNotFound`, keep the existing value from `Load()` (env var / viper). `Load()` signature remains unchanged.
+- [x] T021 [US2] Add `LoadSecrets(store secrets.SecretStore) error` method to `*Config` in `internal/config/config.go`. Check `store.Get(secrets.KeyGeminiAPIKey)` — if found, override `c.GeminiAPIKey` with the keychain value. If `ErrNotFound`, keep the existing value from `Load()` (env var / viper). `Load()` signature remains unchanged.
 - [ ] T022 [US2] Update `init` command in `cmd/gcal-organizer/selfservice.go` to store the user-provided API key in the `SecretStore` via `store.Set(KeyGeminiAPIKey, apiKey)` when keychain is available, instead of (or in addition to) writing it to `.env`.
-- [ ] T023 [US2] Update all callers of `config.Load()` in `cmd/gcal-organizer/` to add `cfg.LoadSecrets(store)` after `config.Load()` and `secrets.NewStore()`. The `Load()` call itself is unchanged. Startup flow: `cfg, _ := config.Load()` → `store, backend := secrets.NewStore(cfg.NoKeyring)` → `cfg.LoadSecrets(store)`. Ensure `config show` still displays the masked API key correctly regardless of source.
+- [x] T023 [US2] Update all callers of `config.Load()` in `cmd/gcal-organizer/` to add `cfg.LoadSecrets(store)` after `config.Load()` and `secrets.NewStore()`. The `Load()` call itself is unchanged. Startup flow: `cfg, _ := config.Load()` → `store, backend := secrets.NewStore(cfg.NoKeyring)` → `cfg.LoadSecrets(store)`. Ensure `config show` still displays the masked API key correctly regardless of source.
 - [ ] T024 [US2] Run `go test ./internal/config/... ./internal/secrets/...` and verify T019-T020 pass. Run `go build ./...`.
 
 **Checkpoint**: API key is loaded from keychain first, env var second. `init` stores keys in keychain. Config commands work correctly.
@@ -103,8 +103,8 @@
 ### Implementation
 
 - [ ] T025 [US3] Verify `NewOAuthClient` in `internal/auth/oauth.go` (already implemented in T013) correctly reads `KeyClientCredentials` from store first, falls back to file. Add a test `TestOAuthClient_LoadCredentialsFromStore` in `internal/auth/oauth_test.go` — pre-populate `KeyClientCredentials` in mock store with a valid `credentials.json` blob, verify `NewOAuthClient` succeeds without any file on disk.
-- [ ] T026 [US3] Update `auth login` in `cmd/gcal-organizer/auth_config.go` — after successfully reading `credentials.json` for the login flow, call `store.Set(KeyClientCredentials, fileContents)` to persist the blob in the credential store.
-- [ ] T027 [US3] Update `auth status` in `cmd/gcal-organizer/auth_config.go` — check for client credentials in store first (`store.Get(KeyClientCredentials)`), then file. Report presence/absence accordingly.
+- [x] T026 [US3] Update `auth login` in `cmd/gcal-organizer/auth_config.go` — after successfully reading `credentials.json` for the login flow, call `store.Set(KeyClientCredentials, fileContents)` to persist the blob in the credential store.
+- [x] T027 [US3] Update `auth status` in `cmd/gcal-organizer/auth_config.go` — check for client credentials in store first (`store.Get(KeyClientCredentials)`), then file. Report presence/absence accordingly.
 - [ ] T028 [US3] Run `go test ./internal/auth/...` and verify T025 passes. Run `go build ./...`.
 
 **Checkpoint**: Client credentials are stored in keychain during login. Auth commands work with credentials from either store or file.
@@ -147,8 +147,8 @@
 
 ### Implementation
 
-- [ ] T038 [US5] Add `NoKeyring bool` field to `Config` struct in `internal/config/config.go`. Add viper binding: `viper.BindEnv("no_keyring", "GCAL_NO_KEYRING")`. Load via `cfg.NoKeyring = viper.GetBool("no-keyring")`.
-- [ ] T039 [US5] Add `--no-keyring` persistent flag on `rootCmd` in `cmd/gcal-organizer/main.go` — `rootCmd.PersistentFlags().Bool("no-keyring", false, "Disable OS credential store; use file-based storage")`. Bind to viper: `viper.BindPFlag("no-keyring", rootCmd.PersistentFlags().Lookup("no-keyring"))`.
+- [x] T038 [US5] Add `NoKeyring bool` field to `Config` struct in `internal/config/config.go`. Add viper binding: `viper.BindEnv("no_keyring", "GCAL_NO_KEYRING")`. Load via `cfg.NoKeyring = viper.GetBool("no-keyring")`.
+- [x] T039 [US5] Add `--no-keyring` persistent flag on `rootCmd` in `cmd/gcal-organizer/main.go` — `rootCmd.PersistentFlags().Bool("no-keyring", false, "Disable OS credential store; use file-based storage")`. Bind to viper: `viper.BindPFlag("no-keyring", rootCmd.PersistentFlags().Lookup("no-keyring"))`.
 - [ ] T040 [US5] Run `go test ./internal/config/... ./internal/secrets/...` and verify T036-T037 pass. Run `go build ./...`.
 
 **Checkpoint**: `--no-keyring` and `GCAL_NO_KEYRING` force file-based storage. Unavailable keyring falls back gracefully.
@@ -160,8 +160,8 @@
 **Purpose**: Doctor reporting, documentation, and final validation.
 
 - [ ] T041 [P] Update `doctor` command in `cmd/gcal-organizer/selfservice.go` — add a new check reporting secret storage backend: "Secrets stored in OS keychain" (pass) or "Secrets stored in plaintext files" (warn with fix suggestion). When `--verbose`, report per-secret status (`oauth-token: present/absent`, `gemini-api-key: present/absent`, `credentials-json: present/absent`). Update the `token.json` check to handle keychain-based storage (token may not be a file anymore).
-- [ ] T042 [P] Update `config show` in `cmd/gcal-organizer/auth_config.go` — replace "Token File: ..." line with "Secret storage: OS keychain" or "Secret storage: plaintext files" depending on active backend. Keep masked API key display.
-- [ ] T043 [P] Update `auth status` in `cmd/gcal-organizer/auth_config.go` — report storage backend alongside authentication status.
+- [x] T042 [P] Update `config show` in `cmd/gcal-organizer/auth_config.go` — replace "Token File: ..." line with "Secret storage: OS keychain" or "Secret storage: plaintext files" depending on active backend. Keep masked API key display.
+- [x] T043 [P] Update `auth status` in `cmd/gcal-organizer/auth_config.go` — report storage backend alongside authentication status.
 - [ ] T044 [P] Update `README.md` — add "Secure Credential Storage" section documenting keychain behavior, `--no-keyring` flag, `GCAL_NO_KEYRING` env var, migration behavior, and behavior comparison table (from quickstart.md).
 - [ ] T045 [P] Update `docs/SETUP.md` — update credential setup instructions to mention keychain storage as default, add guidance for headless environments and `--no-keyring` opt-out.
 - [ ] T046 [P] Update `man/gcal-organizer.1` — add `--no-keyring` flag description, update credential storage documentation.

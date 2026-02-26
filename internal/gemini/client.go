@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jflowers/gcal-organizer/internal/retry"
+	"github.com/jflowers/gcal-organizer/pkg/models"
 	"google.golang.org/genai"
 )
 
@@ -111,7 +112,9 @@ Your response:`, itemsList.String())
 		return nil, fmt.Errorf("Gemini API error: %w", err)
 	}
 
-	if len(result.Candidates) == 0 || len(result.Candidates[0].Content.Parts) == 0 {
+	if len(result.Candidates) == 0 ||
+		result.Candidates[0].Content == nil ||
+		len(result.Candidates[0].Content.Parts) == 0 {
 		return nil, fmt.Errorf("no response from Gemini")
 	}
 
@@ -130,6 +133,126 @@ Your response:`, itemsList.String())
 	}
 
 	return assignments, nil
+}
+
+// ExtractDecisions sends a transcript to Gemini and returns structured decisions.
+func (c *Client) ExtractDecisions(ctx context.Context, transcriptText string) ([]models.Decision, error) {
+	if transcriptText == "" {
+		return nil, nil
+	}
+
+	prompt := fmt.Sprintf(`You are a meeting decision extraction assistant. Analyze the following meeting transcript and extract all decisions into three categories:
+
+1. "made" — Decisions that were explicitly agreed upon or committed to
+2. "deferred" — Decisions that were explicitly postponed or tabled for later
+3. "open" — Topics discussed but left unresolved, needing further discussion
+
+For each decision, provide:
+- "category": one of "made", "deferred", or "open"
+- "text": a clear, concise description of the decision (one sentence)
+- "timestamp": the HH:MM timestamp from the transcript where this was discussed (or empty string if not identifiable)
+- "context": a brief excerpt from the transcript providing context (or empty string)
+
+Return ONLY a JSON array. No other text.
+
+Example response:
+[
+  {"category": "made", "text": "Team will adopt GitHub Actions for CI/CD", "timestamp": "12:34", "context": "After discussing three options, team voted unanimously"},
+  {"category": "deferred", "text": "Budget allocation for Q3", "timestamp": "13:15", "context": "Waiting for finance team input"},
+  {"category": "open", "text": "Whether to migrate to new API version", "timestamp": "13:45", "context": "Need performance benchmarks first"}
+]
+
+If no decisions are found, return an empty array: []
+
+Transcript:
+%s`, transcriptText)
+
+	var result *genai.GenerateContentResponse
+	err := retry.Do(ctx, retry.DefaultConfig(), func() error {
+		var e error
+		result, e = c.client.Models.GenerateContent(ctx, c.modelName, genai.Text(prompt), nil)
+		return e
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Gemini API error: %w", err)
+	}
+
+	if len(result.Candidates) == 0 ||
+		result.Candidates[0].Content == nil ||
+		len(result.Candidates[0].Content.Parts) == 0 {
+		return nil, fmt.Errorf("no response from Gemini")
+	}
+
+	var responseText string
+	for _, part := range result.Candidates[0].Content.Parts {
+		if part.Text != "" {
+			responseText += part.Text
+		}
+	}
+
+	decisions, err := parseDecisionsResponse(responseText)
+	if err != nil {
+		return nil, err
+	}
+
+	return decisions, nil
+}
+
+// parseDecisionsResponse parses the JSON array response from Gemini for decision extraction.
+func parseDecisionsResponse(responseText string) ([]models.Decision, error) {
+	responseText = strings.TrimSpace(responseText)
+	responseText = strings.TrimPrefix(responseText, "```json")
+	responseText = strings.TrimPrefix(responseText, "```")
+	responseText = strings.TrimSuffix(responseText, "```")
+	responseText = strings.TrimSpace(responseText)
+
+	// Try to find JSON array in the response
+	jsonArrayRegex := regexp.MustCompile(`\[[\s\S]*\]`)
+	matches := jsonArrayRegex.FindString(responseText)
+	if matches != "" {
+		responseText = matches
+	}
+
+	var rawDecisions []struct {
+		Category  string `json:"category"`
+		Text      string `json:"text"`
+		Timestamp string `json:"timestamp"`
+		Context   string `json:"context"`
+	}
+
+	if err := json.Unmarshal([]byte(responseText), &rawDecisions); err != nil {
+		// Do not include raw response text in error — it may contain
+		// confidential transcript content from the meeting.
+		return nil, fmt.Errorf("failed to parse Gemini decisions response as JSON array: %w", err)
+	}
+
+	validCategories := map[string]bool{
+		"made":     true,
+		"deferred": true,
+		"open":     true,
+	}
+
+	var decisions []models.Decision
+	for _, raw := range rawDecisions {
+		text := strings.TrimSpace(raw.Text)
+		if text == "" {
+			continue
+		}
+
+		category := strings.ToLower(strings.TrimSpace(raw.Category))
+		if !validCategories[category] {
+			category = "open"
+		}
+
+		decisions = append(decisions, models.Decision{
+			Category:  category,
+			Text:      text,
+			Timestamp: strings.TrimSpace(raw.Timestamp),
+			Context:   strings.TrimSpace(raw.Context),
+		})
+	}
+
+	return decisions, nil
 }
 
 // parseAssignmentsResponse parses the JSON array response from Gemini.
@@ -154,7 +277,9 @@ func parseAssignmentsResponse(responseText string, items []CheckboxItem) ([]Chec
 	}
 
 	if err := json.Unmarshal([]byte(responseText), &rawAssignments); err != nil {
-		return nil, fmt.Errorf("failed to parse Gemini response as JSON array: %w\nResponse was: %s", err, responseText)
+		// Do not include raw response text in error — it may contain
+		// confidential task content from the meeting document.
+		return nil, fmt.Errorf("failed to parse Gemini response as JSON array: %w", err)
 	}
 
 	// Map items by index for easy lookup

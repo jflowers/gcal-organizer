@@ -2,13 +2,24 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/jflowers/gcal-organizer/internal/ux"
 	"github.com/spf13/viper"
 )
+
+// mustBindEnv wraps viper.BindEnv and panics on error. Configuration binding
+// failures indicate a programming error (typo in key name) that should be
+// caught immediately at startup.
+func mustBindEnv(args ...string) {
+	if err := viper.BindEnv(args...); err != nil {
+		panic(fmt.Sprintf("viper.BindEnv(%v) failed: %v", args, err))
+	}
+}
 
 // Config holds all configuration values for the application.
 type Config struct {
@@ -33,7 +44,7 @@ type Config struct {
 	// CredentialsFile is the path to the Google OAuth credentials file
 	CredentialsFile string
 
-	// TokenFile is the path to store OAuth tokens
+	// TokenFile is the path to store OAuth tokens (legacy, used by FileStore)
 	TokenFile string
 
 	// Verbose enables verbose output
@@ -44,6 +55,9 @@ type Config struct {
 
 	// OwnedOnly restricts mutations to files owned by the authenticated user
 	OwnedOnly bool
+
+	// NoKeyring disables OS credential store; use file-based storage
+	NoKeyring bool
 
 	// ChromeProfilePath is the path to Chrome profile for browser automation
 	ChromeProfilePath string
@@ -77,14 +91,15 @@ func Load() (*Config, error) {
 	viper.AutomaticEnv()
 
 	// Bind specific environment variables
-	viper.BindEnv("master_folder_name", "GCAL_MASTER_FOLDER_NAME")
-	viper.BindEnv("days_to_look_back", "GCAL_DAYS_TO_LOOK_BACK")
-	viper.BindEnv("filename_pattern", "GCAL_FILENAME_PATTERN")
-	viper.BindEnv("filename_keywords", "GCAL_FILENAME_KEYWORDS")
-	viper.BindEnv("gemini_api_key", "GEMINI_API_KEY")
-	viper.BindEnv("gemini_model", "GEMINI_MODEL")
-	viper.BindEnv("credentials_file", "GOOGLE_CREDENTIALS_FILE")
-	viper.BindEnv("owned-only", "GCAL_OWNED_ONLY")
+	mustBindEnv("master_folder_name", "GCAL_MASTER_FOLDER_NAME")
+	mustBindEnv("days_to_look_back", "GCAL_DAYS_TO_LOOK_BACK")
+	mustBindEnv("filename_pattern", "GCAL_FILENAME_PATTERN")
+	mustBindEnv("filename_keywords", "GCAL_FILENAME_KEYWORDS")
+	mustBindEnv("gemini_api_key", "GEMINI_API_KEY")
+	mustBindEnv("gemini_model", "GEMINI_MODEL")
+	mustBindEnv("credentials_file", "GOOGLE_CREDENTIALS_FILE")
+	mustBindEnv("owned-only", "GCAL_OWNED_ONLY")
+	mustBindEnv("no-keyring", "GCAL_NO_KEYRING")
 
 	// Override defaults with viper values
 	if v := viper.GetString("master_folder_name"); v != "" {
@@ -112,8 +127,21 @@ func Load() (*Config, error) {
 	cfg.Verbose = viper.GetBool("verbose")
 	cfg.DryRun = viper.GetBool("dry-run")
 	cfg.OwnedOnly = viper.GetBool("owned-only")
+	cfg.NoKeyring = viper.GetBool("no-keyring")
 
 	return cfg, nil
+}
+
+// LoadSecrets loads secrets from the SecretStore, overriding values from
+// environment variables when a keychain value is present. This allows
+// keychain-stored secrets to take precedence over env vars while preserving
+// env var fallback behavior.
+func (c *Config) LoadSecrets(store secrets.SecretStore) {
+	// Try to load the Gemini API key from the store. If found, it takes
+	// precedence over the env var value already loaded by Load().
+	if val, err := store.Get(secrets.KeyGeminiAPIKey); err == nil && val != "" {
+		c.GeminiAPIKey = val
+	}
 }
 
 // Validate checks that required configuration values are set.

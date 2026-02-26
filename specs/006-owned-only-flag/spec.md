@@ -2,7 +2,7 @@
 
 **Feature Branch**: `006-owned-only-flag`  
 **Created**: 2026-02-26  
-**Status**: Draft  
+**Status**: Implemented  
 **Input**: User description: "Add --owned-only global flag to prevent mutations on files not owned by the authenticated user, allowing only read-only operations like shortcut creation on non-owned files"
 
 ## User Scenarios & Testing *(mandatory)*

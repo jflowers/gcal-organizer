@@ -9,7 +9,7 @@ gcal-organizer \- automate meeting note organization, calendar syncing, and task
 .SH DESCRIPTION
 .B gcal-organizer
 is a CLI tool that automates meeting note organization using Google Workspace APIs
-and Gemini AI. It runs a 3-step workflow:
+and Gemini AI. It runs a 4-step workflow:
 .PP
 .B Step 1: Organize
 \- Finds meeting docs matching a naming pattern (e.g.,
@@ -26,10 +26,19 @@ with all event attendees (writer access).
 \- Extracts checkbox items from Google Docs, uses Gemini AI to identify
 assignees, and automates Chrome via Playwright to click the native
 "Assign as a task" widget in Google Docs.
+.PP
+.B Step 4: Extract Decisions
+\- Reads meeting transcript documents (matched by "Notes by Gemini" exact
+title or "- Transcript" suffix), sends the transcript text to Gemini AI
+for decision extraction, and creates a "Decisions" tab in the document
+with three categorized sections: Decisions Made, Decisions Deferred,
+and Open Items. Each decision includes a clickable timestamp link back
+to the corresponding heading in the Transcript tab. Documents with an
+existing Decisions tab are skipped (idempotent).
 .SH COMMANDS
 .TP
 .B run
-Execute the full 3-step workflow.
+Execute the full 4-step workflow.
 .TP
 .B organize
 Step 1 only: organize documents into topic folders.
@@ -93,6 +102,11 @@ commands.
 .TP
 .B \-\-config \fIFILE\fR
 Path to config file (default: ~/.gcal-organizer/config.yaml).
+.TP
+.B \-\-no\-keyring
+Disable OS credential store (macOS Keychain, Linux Secret Service); use
+file-based storage instead. Useful for headless servers or environments
+without a credential store. Can also be set via GCAL_NO_KEYRING=true.
 .SH ENVIRONMENT
 .TP
 .B GEMINI_API_KEY
@@ -114,7 +128,10 @@ Comma-separated keywords to filter documents (default: "Notes,Meeting").
 Regex for parsing document names (default: (.+)\\s*-\\s*(\\d{4}-\\d{2}-\\d{2})).
 .TP
 .B GEMINI_MODEL
-Gemini model to use (default: gemini-1.5-flash).
+Gemini model to use (default: gemini-2.0-flash).
+.TP
+.B GCAL_NO_KEYRING
+When set to "true", disable OS credential store; use file-based storage (default: false).
 .TP
 .B GCAL_ORGANIZER_BIN
 Override path to the gcal-organizer binary (used by the service wrapper).
@@ -124,7 +141,9 @@ Override path to the gcal-organizer binary (used by the service wrapper).
 Google OAuth2 client credentials.
 .TP
 .I ~/.gcal-organizer/token.json
-Stored OAuth2 token (auto-generated on first login).
+Stored OAuth2 token. Used only in file-based fallback mode (\-\-no\-keyring
+or when the OS keychain is unavailable). When the keychain is active,
+tokens are stored in the OS credential store instead.
 .TP
 .I ~/.gcal-organizer/config.yaml
 Configuration file (optional, env vars take precedence).
@@ -171,9 +190,9 @@ and
 .B setup-browser
 commands will detect Flatpak Chrome and warn if this override is missing.
 .SH DATA PRIVACY
-Only the text of individual checkbox items is sent to Gemini AI for assignee
-extraction. Full document contents are never uploaded. OAuth tokens and
-credentials are stored locally and never transmitted.
+Individual checkbox items are sent to Gemini AI for assignee extraction (Step 3).
+Full transcript text is sent to Gemini for decision extraction (Step 4).
+OAuth tokens and credentials are stored locally and never transmitted.
 .SH EXAMPLES
 .TP
 Run the full workflow with verbose output:

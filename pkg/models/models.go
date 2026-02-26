@@ -91,6 +91,45 @@ type Attachment struct {
 	FileURL string
 }
 
+// Decision represents a single decision extracted from a meeting transcript.
+type Decision struct {
+	// Category is the decision classification: "made", "deferred", or "open"
+	Category string
+
+	// Text is the description of the decision
+	Text string
+
+	// Timestamp is the associated meeting timestamp (HH:MM format, or empty)
+	Timestamp string
+
+	// Context is a brief excerpt from the transcript providing context
+	Context string
+}
+
+// TranscriptHeading represents an H3 timestamp heading in a Transcript tab.
+type TranscriptHeading struct {
+	// HeadingID is the server-assigned heading identifier (e.g., "h.xxxxxxxx")
+	HeadingID string
+
+	// Text is the display text of the heading (e.g., "12:34")
+	Text string
+
+	// Index is the zero-based position in the document body
+	Index int64
+}
+
+// TranscriptContent aggregates the full parsed content of a transcript tab.
+type TranscriptContent struct {
+	// TabID is the Transcript tab identifier
+	TabID string
+
+	// FullText is the complete text content of the transcript
+	FullText string
+
+	// Headings is the ordered list of H3 timestamp headings
+	Headings []TranscriptHeading
+}
+
 // Attendee represents a calendar event attendee.
 type Attendee struct {
 	// Email is the attendee's email address

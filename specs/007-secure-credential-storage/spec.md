@@ -2,7 +2,7 @@
 
 **Feature Branch**: `007-secure-credential-storage`  
 **Created**: 2026-02-26  
-**Status**: Draft  
+**Status**: In Progress (Phases 1-5,7 complete; Phase 6 migration, Phase 8 polish pending)  
 **Input**: User concern about auth/token information stored in cleartext
 
 ---

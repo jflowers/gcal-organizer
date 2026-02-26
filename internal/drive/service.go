@@ -3,6 +3,7 @@ package drive
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/retry"
 	"github.com/jflowers/gcal-organizer/pkg/models"
 	"google.golang.org/api/drive/v3"
+	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
 )
 
@@ -462,13 +464,18 @@ func (s *Service) CreateShortcut(ctx context.Context, fileID, fileName, targetFo
 		return e
 	})
 	if err != nil {
-		// Include file URL for requesting access if permission denied
+		// Include file URL for requesting access if permission denied.
+		// Use structured error inspection via googleapi.Error when possible.
 		fileURL := fmt.Sprintf("https://drive.google.com/file/d/%s/view", fileID)
 		reason := fmt.Sprintf("error: %v", err)
-		if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "forbidden") || strings.Contains(err.Error(), "permission") {
-			reason = fmt.Sprintf("Permission denied. Request access: %s", fileURL)
-		} else if strings.Contains(err.Error(), "404") || strings.Contains(err.Error(), "notFound") {
-			reason = fmt.Sprintf("File not found or deleted: %s", fileURL)
+		var apiErr *googleapi.Error
+		if errors.As(err, &apiErr) {
+			switch apiErr.Code {
+			case 403:
+				reason = fmt.Sprintf("Permission denied. Request access: %s", fileURL)
+			case 404:
+				reason = fmt.Sprintf("File not found or deleted: %s", fileURL)
+			}
 		}
 		return ActionResult{
 			Action:  "shortcut",

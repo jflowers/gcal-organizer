@@ -2,9 +2,11 @@ package organizer
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/jflowers/gcal-organizer/internal/config"
+	"github.com/jflowers/gcal-organizer/internal/docs"
 	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/logging"
 	"github.com/jflowers/gcal-organizer/pkg/models"
@@ -161,11 +163,12 @@ func (m *mockCalendarService) ListRecentEvents(_ context.Context, _ int) ([]*mod
 // newTestOrganizer creates an Organizer with mock services for testing.
 func newTestOrganizer(cfg *config.Config, driveMock *mockDriveService, calMock *mockCalendarService) *Organizer {
 	return &Organizer{
-		config:      cfg,
-		drive:       driveMock,
-		calendar:    calMock,
-		logger:      logging.Logger,
-		notesDocIDs: make(map[string]bool),
+		config:         cfg,
+		drive:          driveMock,
+		calendar:       calMock,
+		logger:         logging.Logger,
+		notesDocIDs:    make(map[string]bool),
+		decisionDocIDs: make(map[string]string),
 	}
 }
 
@@ -488,5 +491,346 @@ func TestSyncCalendarAttachments_OwnedOnlyFalse_PreservesExistingBehavior(t *tes
 	}
 	if len(driveMock.shareFileCalls) > 0 && driveMock.shareFileCalls[0].fileID != "att1" {
 		t.Errorf("expected ShareFile for att1, got %s", driveMock.shareFileCalls[0].fileID)
+	}
+}
+
+// ---------- T004: Decision document collection tests ----------
+
+func TestDecisionDocCollection(t *testing.T) {
+	tests := []struct {
+		name         string
+		events       []*models.CalendarEvent
+		ownedOnly    bool
+		isFileOwned  map[string]bool
+		wantDocIDs   map[string]string
+		wantDocCount int
+	}{
+		{
+			name: "exact match Notes by Gemini",
+			events: []*models.CalendarEvent{
+				{
+					ID:    "event1",
+					Title: "Weekly",
+					Attachments: []models.Attachment{
+						{FileID: "doc1", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+					},
+				},
+			},
+			wantDocIDs:   map[string]string{"doc1": "notes-by-gemini"},
+			wantDocCount: 1,
+		},
+		{
+			name: "suffix match - Transcript",
+			events: []*models.CalendarEvent{
+				{
+					ID:    "event1",
+					Title: "Standup",
+					Attachments: []models.Attachment{
+						{FileID: "doc2", Title: "ComplyTime Standup - 2026/02/25 14:00 WET - Transcript", MimeType: "application/vnd.google-apps.document"},
+					},
+				},
+			},
+			wantDocIDs:   map[string]string{"doc2": "transcript"},
+			wantDocCount: 1,
+		},
+		{
+			name: "non-matching title rejected",
+			events: []*models.CalendarEvent{
+				{
+					ID:    "event1",
+					Title: "Weekly",
+					Attachments: []models.Attachment{
+						{FileID: "doc3", Title: "Meeting Agenda", MimeType: "application/vnd.google-apps.document"},
+					},
+				},
+			},
+			wantDocIDs:   map[string]string{},
+			wantDocCount: 0,
+		},
+		{
+			name: "per-event deduplication prefers Notes by Gemini",
+			events: []*models.CalendarEvent{
+				{
+					ID:    "event1",
+					Title: "Weekly",
+					Attachments: []models.Attachment{
+						{FileID: "doc-nbg", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+						{FileID: "doc-transcript", Title: "Weekly - 2026/02/25 14:00 WET - Transcript", MimeType: "application/vnd.google-apps.document"},
+					},
+				},
+			},
+			wantDocIDs:   map[string]string{"doc-nbg": "notes-by-gemini"},
+			wantDocCount: 1,
+		},
+		{
+			name: "owned-only filters unowned docs",
+			events: []*models.CalendarEvent{
+				{
+					ID:    "event1",
+					Title: "Weekly",
+					Attachments: []models.Attachment{
+						{FileID: "doc-owned", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+						{FileID: "doc-unowned", Title: "Standup - Transcript", MimeType: "application/vnd.google-apps.document"},
+					},
+				},
+			},
+			ownedOnly:    true,
+			isFileOwned:  map[string]bool{"doc-owned": true, "doc-unowned": false},
+			wantDocIDs:   map[string]string{"doc-owned": "notes-by-gemini"},
+			wantDocCount: 1,
+		},
+		{
+			name: "multiple events collect independently",
+			events: []*models.CalendarEvent{
+				{
+					ID:    "event1",
+					Title: "Weekly",
+					Attachments: []models.Attachment{
+						{FileID: "doc1", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+					},
+				},
+				{
+					ID:    "event2",
+					Title: "Standup",
+					Attachments: []models.Attachment{
+						{FileID: "doc2", Title: "Standup - Transcript", MimeType: "application/vnd.google-apps.document"},
+					},
+				},
+			},
+			wantDocIDs:   map[string]string{"doc1": "notes-by-gemini", "doc2": "transcript"},
+			wantDocCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driveMock := &mockDriveService{
+				isFileOwnedResults: tt.isFileOwned,
+				canEditFileResults: map[string]bool{}, // no sharing in this test
+			}
+			calMock := &mockCalendarService{
+				listRecentEventsReturn: tt.events,
+			}
+			cfg := config.DefaultConfig()
+			cfg.OwnedOnly = tt.ownedOnly
+
+			org := newTestOrganizer(cfg, driveMock, calMock)
+			err := org.SyncCalendarAttachments(context.Background())
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			gotDocIDs := org.GetDecisionDocIDs()
+			if len(gotDocIDs) != tt.wantDocCount {
+				t.Errorf("expected %d decision doc IDs, got %d: %v", tt.wantDocCount, len(gotDocIDs), gotDocIDs)
+			}
+
+			for wantID, wantSource := range tt.wantDocIDs {
+				gotSource, ok := gotDocIDs[wantID]
+				if !ok {
+					t.Errorf("expected doc ID %s in decisionDocIDs, but not found", wantID)
+					continue
+				}
+				if gotSource != wantSource {
+					t.Errorf("doc %s: expected source %q, got %q", wantID, wantSource, gotSource)
+				}
+			}
+		})
+	}
+}
+
+// ---------- Mock DocsService and GeminiService for ExtractDecisionsForDoc tests ----------
+
+type mockDocsService struct {
+	hasDecisionsTab         bool
+	hasDecisionsTabErr      error
+	transcriptContent       *models.TranscriptContent
+	transcriptContentErr    error
+	createDecisionsTabErr   error
+	createDecisionsTabCalls int
+}
+
+func (m *mockDocsService) ExtractTranscriptContent(_ context.Context, _ string) (*models.TranscriptContent, error) {
+	return m.transcriptContent, m.transcriptContentErr
+}
+
+func (m *mockDocsService) HasDecisionsTab(_ context.Context, _ string) (bool, error) {
+	return m.hasDecisionsTab, m.hasDecisionsTabErr
+}
+
+func (m *mockDocsService) CreateDecisionsTab(_ context.Context, _ string, _ []models.Decision, _ *models.TranscriptContent) error {
+	m.createDecisionsTabCalls++
+	return m.createDecisionsTabErr
+}
+
+type mockGeminiService struct {
+	decisions    []models.Decision
+	extractErr   error
+	extractCalls int
+}
+
+func (m *mockGeminiService) ExtractDecisions(_ context.Context, _ string) ([]models.Decision, error) {
+	m.extractCalls++
+	return m.decisions, m.extractErr
+}
+
+// ---------- TestExtractDecisionsForDoc ----------
+
+func TestExtractDecisionsForDoc(t *testing.T) {
+	tests := []struct {
+		name               string
+		docsSvc            *mockDocsService
+		geminiSvc          *mockGeminiService
+		dryRun             bool
+		wantErr            bool
+		wantProcessed      int
+		wantSkipped        int
+		wantFailed         int
+		wantCreateTabCalls int
+		wantGeminiCalls    int
+	}{
+		{
+			name: "already has Decisions tab - skip",
+			docsSvc: &mockDocsService{
+				hasDecisionsTab: true,
+			},
+			geminiSvc:          &mockGeminiService{},
+			wantSkipped:        1,
+			wantGeminiCalls:    0,
+			wantCreateTabCalls: 0,
+		},
+		{
+			name: "no transcript content - skip",
+			docsSvc: &mockDocsService{
+				hasDecisionsTab:   false,
+				transcriptContent: nil,
+			},
+			geminiSvc:          &mockGeminiService{},
+			wantSkipped:        1,
+			wantGeminiCalls:    0,
+			wantCreateTabCalls: 0,
+		},
+		{
+			name: "empty transcript text - skip",
+			docsSvc: &mockDocsService{
+				hasDecisionsTab:   false,
+				transcriptContent: &models.TranscriptContent{TabID: "tab1", FullText: ""},
+			},
+			geminiSvc:          &mockGeminiService{},
+			wantSkipped:        1,
+			wantGeminiCalls:    0,
+			wantCreateTabCalls: 0,
+		},
+		{
+			name:   "dry-run - logs only, no Gemini call",
+			dryRun: true,
+			docsSvc: &mockDocsService{
+				hasDecisionsTab: false,
+				transcriptContent: &models.TranscriptContent{
+					TabID:    "tab1",
+					FullText: "Meeting transcript text",
+				},
+			},
+			geminiSvc:          &mockGeminiService{},
+			wantProcessed:      1,
+			wantGeminiCalls:    0,
+			wantCreateTabCalls: 0,
+		},
+		{
+			name: "Gemini failure - skip with warning",
+			docsSvc: &mockDocsService{
+				hasDecisionsTab: false,
+				transcriptContent: &models.TranscriptContent{
+					TabID:    "tab1",
+					FullText: "Meeting transcript text",
+				},
+			},
+			geminiSvc: &mockGeminiService{
+				extractErr: fmt.Errorf("Gemini API error: rate limited"),
+			},
+			wantFailed:         1,
+			wantGeminiCalls:    1,
+			wantCreateTabCalls: 0,
+		},
+		{
+			name: "concurrent tab creation - sentinel error treated as skip",
+			docsSvc: &mockDocsService{
+				hasDecisionsTab: false,
+				transcriptContent: &models.TranscriptContent{
+					TabID:    "tab1",
+					FullText: "Meeting transcript text",
+				},
+				createDecisionsTabErr: docs.ErrDecisionsTabExists,
+			},
+			geminiSvc: &mockGeminiService{
+				decisions: []models.Decision{
+					{Category: "made", Text: "Test decision"},
+				},
+			},
+			wantSkipped:        1,
+			wantGeminiCalls:    1,
+			wantCreateTabCalls: 1,
+		},
+		{
+			name: "happy path - decisions extracted and tab created",
+			docsSvc: &mockDocsService{
+				hasDecisionsTab: false,
+				transcriptContent: &models.TranscriptContent{
+					TabID:    "tab1",
+					FullText: "Meeting transcript with decisions",
+				},
+			},
+			geminiSvc: &mockGeminiService{
+				decisions: []models.Decision{
+					{Category: "made", Text: "Adopt new pipeline", Timestamp: "12:34"},
+					{Category: "deferred", Text: "Budget review", Timestamp: "13:00"},
+				},
+			},
+			wantProcessed:      1,
+			wantGeminiCalls:    1,
+			wantCreateTabCalls: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driveMock := &mockDriveService{}
+			calMock := &mockCalendarService{}
+			cfg := config.DefaultConfig()
+			org := newTestOrganizer(cfg, driveMock, calMock)
+
+			err := org.ExtractDecisionsForDoc(context.Background(), "test-doc-id", tt.docsSvc, tt.geminiSvc, tt.dryRun)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error, got nil")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if org.stats.DecisionsProcessed != tt.wantProcessed {
+				t.Errorf("DecisionsProcessed: got %d, want %d", org.stats.DecisionsProcessed, tt.wantProcessed)
+			}
+
+			if org.stats.DecisionsSkipped != tt.wantSkipped {
+				t.Errorf("DecisionsSkipped: got %d, want %d", org.stats.DecisionsSkipped, tt.wantSkipped)
+			}
+
+			if org.stats.DecisionsFailed != tt.wantFailed {
+				t.Errorf("DecisionsFailed: got %d, want %d", org.stats.DecisionsFailed, tt.wantFailed)
+			}
+
+			if tt.docsSvc.createDecisionsTabCalls != tt.wantCreateTabCalls {
+				t.Errorf("CreateDecisionsTab calls: got %d, want %d", tt.docsSvc.createDecisionsTabCalls, tt.wantCreateTabCalls)
+			}
+
+			if tt.geminiSvc.extractCalls != tt.wantGeminiCalls {
+				t.Errorf("ExtractDecisions calls: got %d, want %d", tt.geminiSvc.extractCalls, tt.wantGeminiCalls)
+			}
+		})
 	}
 }

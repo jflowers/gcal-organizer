@@ -55,7 +55,7 @@ Error messages guide users to self-service tools.
 ### API Limitations
 - GCP Gemini API key (project: gcp-jflowers-pro-gemini)
 - Use `google.golang.org/genai` SDK
-- Model: gemini-1.5-flash (or configurable)
+- Model: gemini-2.0-flash (or configurable)
 - Handle rate limiting and quotas gracefully
 
 ### Google Workspace Integration

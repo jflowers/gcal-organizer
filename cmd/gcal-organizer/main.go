@@ -13,8 +13,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/jflowers/gcal-organizer/internal/auth"
 	"github.com/jflowers/gcal-organizer/internal/calendar"
@@ -22,8 +25,10 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/logging"
 	"github.com/jflowers/gcal-organizer/internal/organizer"
+	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/jflowers/gcal-organizer/internal/ux"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
@@ -37,6 +42,14 @@ var (
 	dryRun    bool
 	ownedOnly bool
 )
+
+// mustBindPFlag wraps viper.BindPFlag and panics on error. Errors here indicate
+// a programming mistake (typo in flag name) and should surface at startup.
+func mustBindPFlag(key string, flag *pflag.Flag) {
+	if err := viper.BindPFlag(key, flag); err != nil {
+		panic(fmt.Sprintf("viper.BindPFlag(%q) failed: %v", key, err))
+	}
+}
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -53,9 +66,22 @@ Use the subcommands to run specific operations or 'run' for the full workflow.`,
 	Version: Version,
 }
 
+// loadConfigAndStore loads configuration and creates a SecretStore.
+// This is the standard startup sequence for all commands that need secrets.
+// Returns the backend so callers can display it without re-probing the keychain.
+func loadConfigAndStore() (*config.Config, secrets.SecretStore, secrets.Backend, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	store, backend := secrets.NewStore(cfg.NoKeyring)
+	cfg.LoadSecrets(store)
+	return cfg, store, backend, nil
+}
+
 // initServices initializes all Google API services and returns an Organizer.
-func initServices(ctx context.Context, cfg *config.Config) (*organizer.Organizer, error) {
-	oauthClient, err := auth.NewOAuthClient(cfg.CredentialsFile, cfg.TokenFile)
+func initServices(ctx context.Context, cfg *config.Config, store secrets.SecretStore) (*organizer.Organizer, error) {
+	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
 	if err != nil {
 		return nil, ux.OAuthSetupFailed(cfg.CredentialsFile)
 	}
@@ -84,9 +110,10 @@ var runCmd = &cobra.Command{
 	Short: "Run the complete workflow",
 	Long:  `Execute all operations: organize documents, sync calendar attachments, and assign tasks.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 
-		cfg, err := config.Load()
+		cfg, store, _, err := loadConfigAndStore()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w\n\nRun 'gcal-organizer doctor' for diagnostics", err)
 		}
@@ -102,7 +129,7 @@ var runCmd = &cobra.Command{
 			cfg.DaysToLookBack = days
 		}
 
-		org, err := initServices(ctx, cfg)
+		org, err := initServices(ctx, cfg, store)
 		if err != nil {
 			return err
 		}
@@ -126,7 +153,7 @@ var runCmd = &cobra.Command{
 			totalFailed := 0
 
 			for _, docID := range docIDs {
-				assigned, failed, err := runAssignTasksForDoc(ctx, cfg, docID)
+				assigned, failed, err := runAssignTasksForDoc(ctx, cfg, store, docID)
 				if err != nil {
 					fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
 					continue
@@ -139,6 +166,45 @@ var runCmd = &cobra.Command{
 			fmt.Println()
 		} else if len(docIDs) > 0 && dryRun {
 			fmt.Printf("📝 STEP 3: Would scan %d Notes documents for task assignments\n", len(docIDs))
+			fmt.Println()
+		}
+
+		// Step 4: Extract Decisions from transcript documents
+		decisionDocIDs := org.GetDecisionDocIDs()
+		if ownedOnly && len(decisionDocIDs) == 0 {
+			fmt.Println("📋 STEP 4: No owned transcript documents found for decision extraction")
+		}
+		if len(decisionDocIDs) > 0 {
+			if dryRun {
+				fmt.Printf("📋 STEP 4: Would extract decisions from %d transcript documents\n", len(decisionDocIDs))
+			} else {
+				fmt.Println("📋 STEP 4: Extracting Decisions")
+				fmt.Println("───────────────────────────────────────────────────────────")
+				fmt.Printf("   Found %d transcript documents to process\n", len(decisionDocIDs))
+			}
+
+			// Initialize services once for all documents
+			docsSvc, geminiClient, initErr := initDocsAndGemini(ctx, cfg, store)
+			if initErr != nil {
+				fmt.Printf("   ⚠️  Error initializing services for Step 4: %v\n", initErr)
+			} else {
+				totalFailed := 0
+
+				for docID, source := range decisionDocIDs {
+					if !dryRun {
+						fmt.Printf("   📄 Processing doc %s (source: %s)\n", docID[:min(8, len(docID))], source)
+					}
+					err := org.ExtractDecisionsForDoc(ctx, docID, docsSvc, geminiClient, dryRun)
+					if err != nil {
+						fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
+						totalFailed++
+					}
+				}
+
+				// Only add externally-tracked failures; processed/skipped counts are
+				// managed internally by ExtractDecisionsForDoc via organizer stats.
+				org.AddDecisionStats(0, 0, totalFailed)
+			}
 			fmt.Println()
 		}
 
@@ -155,9 +221,10 @@ var organizeCmd = &cobra.Command{
 	Short: "Organize meeting documents into folders",
 	Long:  `Scan Google Drive for meeting notes and organize them into topic-based subfolders.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 
-		cfg, err := config.Load()
+		cfg, store, _, err := loadConfigAndStore()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
@@ -165,7 +232,7 @@ var organizeCmd = &cobra.Command{
 		cfg.Verbose = verbose
 		cfg.OwnedOnly = ownedOnly
 
-		org, err := initServices(ctx, cfg)
+		org, err := initServices(ctx, cfg, store)
 		if err != nil {
 			return err
 		}
@@ -186,9 +253,10 @@ var syncCalendarCmd = &cobra.Command{
 	Short: "Sync calendar attachments to meeting folders",
 	Long:  `Scan recent calendar events and sync any attached documents to corresponding meeting folders.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
 
-		cfg, err := config.Load()
+		cfg, store, _, err := loadConfigAndStore()
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
@@ -204,7 +272,7 @@ var syncCalendarCmd = &cobra.Command{
 		cfg.Verbose = verbose
 		cfg.OwnedOnly = ownedOnly
 
-		org, err := initServices(ctx, cfg)
+		org, err := initServices(ctx, cfg, store)
 		if err != nil {
 			return err
 		}
@@ -248,11 +316,14 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would be done without making changes")
 	rootCmd.PersistentFlags().BoolVar(&ownedOnly, "owned-only", false, "only mutate files you own; skip non-owned files")
+	rootCmd.PersistentFlags().Bool("no-keyring", false, "disable OS credential store; use file-based storage")
 
-	// Bind flags to viper
-	viper.BindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
-	viper.BindPFlag("dry-run", rootCmd.PersistentFlags().Lookup("dry-run"))
-	viper.BindPFlag("owned-only", rootCmd.PersistentFlags().Lookup("owned-only"))
+	// Bind flags to viper. Errors here indicate a programming mistake (typo in
+	// flag name) and should surface immediately at startup.
+	mustBindPFlag("verbose", rootCmd.PersistentFlags().Lookup("verbose"))
+	mustBindPFlag("dry-run", rootCmd.PersistentFlags().Lookup("dry-run"))
+	mustBindPFlag("owned-only", rootCmd.PersistentFlags().Lookup("owned-only"))
+	mustBindPFlag("no-keyring", rootCmd.PersistentFlags().Lookup("no-keyring"))
 
 	// Add flags to specific commands
 	syncCalendarCmd.Flags().Int("days", 8, "number of days to look back for calendar events")
@@ -302,6 +373,9 @@ func initConfig() {
 	logging.SetVerbose(verbose)
 }
 
+// validEnvKey matches a valid POSIX environment variable name.
+var validEnvKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // loadDotEnv reads a .env file and sets any KEY=VALUE pairs as environment
 // variables, but only if they are not already set (env vars take precedence).
 // Tilde (~) in values is expanded to the user's home directory.
@@ -323,7 +397,7 @@ func loadDotEnv(path, home string) {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
-		if key == "" || strings.ContainsAny(key, "=\x00") {
+		if !validEnvKey.MatchString(key) {
 			continue
 		}
 		val := strings.TrimSpace(parts[1])

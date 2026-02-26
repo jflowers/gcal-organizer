@@ -38,7 +38,6 @@ Evaluate all recent changes (staged, unstaged, and untracked files). Use `git di
   - `internal/drive/` for Google Drive operations
   - `internal/calendar/` for Calendar operations
   - `internal/docs/` for Google Docs parsing
-  - `internal/tasks/` for Google Tasks operations
   - `internal/gemini/` for Gemini AI client
   - `internal/organizer/` for main orchestration logic
   - `internal/retry/` for retry with exponential backoff
