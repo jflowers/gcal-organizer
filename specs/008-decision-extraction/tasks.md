@@ -21,7 +21,7 @@
 
 - [ ] T001 [P] Add `Decision` struct (Category, Text, Timestamp, Context fields) and `TranscriptHeading` struct (HeadingID, Text, Index fields) to `pkg/models/models.go` — per data-model.md entity definitions
 - [ ] T002 [P] Add `TranscriptContent` struct (TabID, FullText, Headings fields) to `pkg/models/models.go` — aggregates transcript tab metadata
-- [ ] T003 Add `decisionDocIDs` field (`map[string]string` mapping docID→source) to `Organizer` struct and `GetDecisionDocIDs()` method to `internal/organizer/organizer.go` — follows existing `notesDocIDs` pattern at line 60
+- [ ] T003 Add `decisionDocIDs` field (`map[string]string` mapping docID→source) to `Organizer` struct and `GetDecisionDocIDs()` method to `internal/organizer/organizer.go` — uses `map[string]string` (unlike `notesDocIDs`'s `map[string]bool`) because the source value (`"notes-by-gemini"` or `"transcript"`) is needed for per-event deduplication and logging
 
 ---
 
@@ -38,7 +38,7 @@
 
 ### Implementation
 
-- [ ] T006 Add decision document collection logic to `SyncCalendarAttachments` in `internal/organizer/organizer.go` — after existing `notesDocIDs` collection (line 288): for each event, check attachment titles for exact "Notes by Gemini" or `strings.HasSuffix(title, "- Transcript")`, apply per-event deduplication, check `--owned-only` via `IsFileOwned`, store in `decisionDocIDs` map (FR-001, FR-002, FR-014, R6, R7)
+- [ ] T006 Add decision document collection logic to `SyncCalendarAttachments` in `internal/organizer/organizer.go` — after existing `notesDocIDs` collection (line 288): for each event, check attachment titles for exact "Notes by Gemini" or `strings.HasSuffix(title, "- Transcript")`, apply per-event deduplication, check `--owned-only` via `IsFileOwned`, store in `decisionDocIDs` map (FR-001, FR-002, FR-014, FR-015, R6, R7)
 - [ ] T007 Implement `ExtractDecisions(ctx, transcriptText string) ([]models.Decision, error)` method on `gemini.Client` in `internal/gemini/client.go` — build prompt requesting JSON array with category/text/timestamp/context fields, call `c.client.Models.GenerateContent` with retry, parse response via new `parseDecisionsResponse` helper (FR-006, FR-007, R4)
 - [ ] T008 Implement `parseDecisionsResponse(responseText string) ([]models.Decision, error)` helper in `internal/gemini/client.go` — strip markdown code fences, extract JSON array via regex, unmarshal into `[]Decision`, filter empty text, validate/default category (data-model.md parsing rules)
 - [ ] T009 Run `go test ./internal/organizer/... ./internal/gemini/...` and verify T004, T005 pass. Run `go vet ./...` and `gofmt -l .`
@@ -55,12 +55,12 @@
 
 ### Tests for User Story 1
 
-- [ ] T010 [P] [US1] Write `TestExtractTranscriptContent` table-driven test in `internal/docs/service_test.go` — verify: finds "Transcript" tab in multi-tab doc, falls back to body content for single-tab doc, returns empty TranscriptContent for doc with no transcript, extracts full text and H3 heading metadata (FR-003, FR-004)
+- [ ] T010 [P] [US1] Write `TestExtractTranscriptContent` table-driven test in `internal/docs/service_test.go` — verify: finds "Transcript" tab in multi-tab doc, uses first tab's content for single-tab doc (via `includeTabsContent=true`), returns empty TranscriptContent for doc with no transcript, extracts full text and H3 heading metadata (FR-003, FR-004)
 - [ ] T011 [P] [US1] Write `TestCreateDecisionsTab` table-driven test in `internal/docs/service_test.go` — verify: creates tab with correct title "Decisions", inserts three H2 section headings, inserts decision bullet text under correct section, handles empty decisions list with "No decisions identified" note (FR-009, FR-010, FR-011, FR-016)
 
 ### Implementation for User Story 1
 
-- [ ] T012 [US1] Implement `ExtractTranscriptContent(ctx, docID string) (*models.TranscriptContent, error)` in `internal/docs/service.go` — call `GetDocument`, iterate `doc.Tabs` to find tab with title "Transcript", extract `DocumentTab.Body.Content` text and H3 headings (ParagraphStyle.NamedStyleType == "HEADING_3") with HeadingID/Text/Index, fall back to `doc.Body.Content` for single-tab docs (FR-003, FR-004, R2)
+- [ ] T012 [US1] Implement `ExtractTranscriptContent(ctx, docID string) (*models.TranscriptContent, error)` in `internal/docs/service.go` — call `Documents.Get(docID)` with `includeTabsContent=true`, always iterate `doc.Tabs` (single-tab docs have one tab entry): find tab with title "Transcript" or use the sole tab for single-tab docs, extract `tab.DocumentTab.Body.Content` text and H3 headings (ParagraphStyle.NamedStyleType == "HEADING_3") with HeadingID/Text/Index (FR-003, FR-004, R2)
 - [ ] T013 [US1] Implement `CreateDecisionsTab(ctx, docID string, decisions []models.Decision, transcript *models.TranscriptContent) error` in `internal/docs/service.go` — BatchUpdate #1: `AddDocumentTab` with title "Decisions", extract TabId from response; BatchUpdate #2: `InsertText` for section headings ("Decisions Made\n", "Decisions Deferred\n", "Open Items\n") and decision bullets, `UpdateParagraphStyle` to style headings as HEADING_2, `CreateParagraphBullets` for decision items; handle empty decisions with "No decisions identified" note (FR-009, FR-010, FR-011, FR-016, R1, R3)
 - [ ] T014 [US1] Add `DocsService` interface to `internal/organizer/organizer.go` with methods: `ExtractTranscriptContent(ctx, docID) (*models.TranscriptContent, error)`, `HasDecisionsTab(ctx, docID) (bool, error)`, `CreateDecisionsTab(ctx, docID, decisions, transcript) error`
 - [ ] T015 [US1] Implement `ExtractDecisionsForDoc(ctx, docID string, docsSvc DocsService, geminiClient *gemini.Client, dryRun bool) error` orchestration function in `internal/organizer/organizer.go` — coordinates: extract transcript → call Gemini → create tab; skip on AI failure with warning (FR-017); log actions for dry-run (FR-013)
@@ -123,7 +123,7 @@
 
 ### Implementation for User Story 4
 
-- [ ] T030 [US4] Add dry-run guard to `ExtractDecisionsForDoc` in `internal/organizer/organizer.go` — when `dryRun` is true: extract transcript and call Gemini (to show what would happen), log the decisions that would be created and the tab that would be added, but skip both BatchUpdate calls; display document title and decision count (FR-013)
+- [ ] T030 [US4] Add dry-run guard to `ExtractDecisionsForDoc` in `internal/organizer/organizer.go` — when `dryRun` is true: skip Gemini and all BatchUpdate calls; only log eligible document title and transcript size (e.g., "Would extract decisions from [doc title] (N characters)"); consistent with Step 3's dry-run pattern which skips expensive operations (FR-013)
 - [ ] T031 [US4] Verify `--owned-only` filtering in `SyncCalendarAttachments` decision collection (from T006) — ensure `IsFileOwned` check gates entry into `decisionDocIDs` map when `o.config.OwnedOnly` is true (FR-014); already implemented in T006 but verify with manual test
 - [ ] T032 [US4] Add dry-run and owned-only output formatting in Step 4 block of `cmd/gcal-organizer/main.go` — match existing Step 3 patterns: "Would extract decisions from N documents" for dry-run, "No owned transcript documents found" when `--owned-only` filters all docs
 
@@ -137,9 +137,10 @@
 
 - [ ] T033 [P] Update README.md with Step 4 documentation — describe decision extraction behavior, supported document patterns, example output
 - [ ] T034 [P] Update AGENTS.md project structure if needed — verify `internal/docs/` description reflects write capability
-- [ ] T035 Run full CI checks: `go build ./... && go test ./... && go vet ./... && gofmt -l . && go mod tidy` — verify no regressions (SC-006)
-- [ ] T036 Run `gcal-organizer run --dry-run` against a real calendar with transcript attachments — manual validation of end-to-end flow
-- [ ] T037 Verify quickstart.md scenarios work as documented in `specs/008-decision-extraction/quickstart.md`
+- [ ] T035 [P] Update `man/gcal-organizer.1` man page with Step 4 behavior — add decision extraction description to the workflow section, per constitution documentation requirement
+- [ ] T036 Run `make ci` — verify no regressions and all quality gates pass (SC-006, constitution Quality Gates)
+- [ ] T037 Run `gcal-organizer run --dry-run` against a real calendar with transcript attachments — manual validation of end-to-end flow
+- [ ] T038 Verify quickstart.md scenarios work as documented in `specs/008-decision-extraction/quickstart.md`
 
 ---
 
@@ -178,7 +179,7 @@
 - T010, T011 can run in parallel (different test functions)
 - T019, T020 can run in parallel (different test functions)
 - T024, T025 can run in parallel (different test functions)
-- T033, T034 can run in parallel (different documentation files)
+- T033, T034, T035 can run in parallel (different documentation files)
 - US3 and US4 can run in parallel after US1 completes (independent guards on the same function)
 
 ---
