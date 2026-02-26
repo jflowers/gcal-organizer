@@ -101,4 +101,14 @@ Browser automation via Playwright for task assignment through Google Docs native
 
 **Rule:** A Pull Request is only "Ready for Human" once the `/review-council` command returns an **APPROVE** status.
 
+## Specify Workflow
+
+After the following `/speckit.*` commands complete successfully, **commit and push** the resulting artifacts:
+
+- `/speckit.specify` — commit the new spec and checklist
+- `/speckit.clarify` — commit the updated spec with clarifications
+- `/speckit.plan` — commit plan.md, research.md, data-model.md, quickstart.md, and any AGENTS.md updates
+- `/speckit.tasks` — commit tasks.md
+- `/speckit.analyze` — commit any analysis artifacts
+
 <!-- MANUAL ADDITIONS END -->
