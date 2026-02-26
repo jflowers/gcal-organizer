@@ -7,6 +7,8 @@ Auto-generated from all feature plans. Last updated: 2026-02-17
 - N/A (no new data persistence; flag stored in config file via existing viper mechanism) (006-owned-only-flag)
 - Go 1.24+ (module `github.com/jflowers/gcal-organizer`) + `github.com/zalando/go-keyring` v0.2.6 (macOS Keychain via `/usr/bin/security`, Linux Secret Service via D-Bus — no CGo), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `golang.org/x/oauth2` (token handling), `github.com/charmbracelet/huh` (interactive prompts), `github.com/mattn/go-isatty` (terminal detection — already indirect dep) (007-secure-credential-storage)
 - OS credential store (primary), filesystem `~/.gcal-organizer/` (fallback). No database. (007-secure-credential-storage)
+- Go 1.24+ (module `github.com/jflowers/gcal-organizer`) + `google.golang.org/api/docs/v1` (Docs API — tab creation, content insertion, heading links), `google.golang.org/genai` (Gemini SDK — transcript analysis), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config) (008-decision-extraction)
+- N/A (no new data persistence; decisions written directly to Google Docs) (008-decision-extraction)
 
 - **Language**: Go 1.21+
 - **CLI Framework**: github.com/spf13/cobra
@@ -69,6 +71,7 @@ make install-hooks
 - New features require documentation before completion
 
 ## Recent Changes
+- 008-decision-extraction: Added Go 1.24+ (module `github.com/jflowers/gcal-organizer`) + `google.golang.org/api/docs/v1` (Docs API — tab creation, content insertion, heading links), `google.golang.org/genai` (Gemini SDK — transcript analysis), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config)
 - 007-secure-credential-storage: Added Go 1.24+ (module `github.com/jflowers/gcal-organizer`) + `github.com/zalando/go-keyring` v0.2.6 (macOS Keychain via `/usr/bin/security`, Linux Secret Service via D-Bus — no CGo), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `golang.org/x/oauth2` (token handling), `github.com/charmbracelet/huh` (interactive prompts), `github.com/mattn/go-isatty` (terminal detection — already indirect dep)
 - 006-owned-only-flag: Added Go 1.21+ + github.com/spf13/cobra (CLI), github.com/spf13/viper (config), Google Drive API v3
 
