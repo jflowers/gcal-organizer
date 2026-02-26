@@ -52,33 +52,6 @@ type MeetingFolder struct {
 	DocumentCount int
 }
 
-// ActionItem represents an action item extracted from a document checkbox.
-type ActionItem struct {
-	// DocumentID is the source Google Doc ID
-	DocumentID string
-
-	// DocumentName is the name of the source document
-	DocumentName string
-
-	// Text is the original checkbox text
-	Text string
-
-	// Assignee is the extracted person responsible
-	Assignee string
-
-	// DueDate is the extracted due date
-	DueDate time.Time
-
-	// LineIndex is the position in the document (for annotation)
-	LineIndex int
-
-	// IsProcessed indicates if this item has already been processed (has 🆔 emoji)
-	IsProcessed bool
-
-	// TaskID is the created Google Task ID (if created)
-	TaskID string
-}
-
 // CalendarEvent represents a Google Calendar event with attachments.
 type CalendarEvent struct {
 	// ID is the calendar event ID

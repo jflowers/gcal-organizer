@@ -323,6 +323,9 @@ func loadDotEnv(path, home string) {
 			continue
 		}
 		key := strings.TrimSpace(parts[0])
+		if key == "" || strings.ContainsAny(key, "=\x00") {
+			continue
+		}
 		val := strings.TrimSpace(parts[1])
 
 		// Strip surrounding quotes (double or single) for bash compatibility.

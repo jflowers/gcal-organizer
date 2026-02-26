@@ -370,7 +370,9 @@ var installCmd = &cobra.Command{
 		if _, err := os.Stat(configDir); os.IsNotExist(err) {
 			fmt.Println("⚠️  Config not found. Running 'gcal-organizer init' first...")
 			fmt.Println()
-			initCmd.RunE(cmd, args)
+			if err := initCmd.RunE(cmd, args); err != nil {
+				return fmt.Errorf("init failed: %w", err)
+			}
 			fmt.Println()
 		}
 

@@ -3,7 +3,7 @@ package config
 
 import (
 	"os"
-
+	"path/filepath"
 	"strings"
 
 	"github.com/jflowers/gcal-organizer/internal/ux"
@@ -53,9 +53,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	home, _ := os.UserHomeDir()
 
-	// Dedicated Chrome profile for gcal-organizer automation.
-	// Stored alongside other config — same path on all OSes.
-	chromePath := home + "/.gcal-organizer/chrome-data"
+	configDir := filepath.Join(home, ".gcal-organizer")
 
 	return &Config{
 		MasterFolderName:  "Meeting Notes",
@@ -63,9 +61,9 @@ func DefaultConfig() *Config {
 		FilenamePattern:   `(.+)\s*-\s*(\d{4}-\d{2}-\d{2})`,
 		FilenameKeywords:  []string{"Notes", "Meeting"},
 		GeminiModel:       "gemini-2.0-flash",
-		CredentialsFile:   home + "/.gcal-organizer/credentials.json",
-		TokenFile:         home + "/.gcal-organizer/token.json",
-		ChromeProfilePath: chromePath,
+		CredentialsFile:   filepath.Join(configDir, "credentials.json"),
+		TokenFile:         filepath.Join(configDir, "token.json"),
+		ChromeProfilePath: filepath.Join(configDir, "chrome-data"),
 	}
 }
 
@@ -86,6 +84,7 @@ func Load() (*Config, error) {
 	viper.BindEnv("gemini_api_key", "GEMINI_API_KEY")
 	viper.BindEnv("gemini_model", "GEMINI_MODEL")
 	viper.BindEnv("credentials_file", "GOOGLE_CREDENTIALS_FILE")
+	viper.BindEnv("owned-only", "GCAL_OWNED_ONLY")
 
 	// Override defaults with viper values
 	if v := viper.GetString("master_folder_name"); v != "" {
@@ -122,18 +121,5 @@ func (c *Config) Validate() error {
 	if c.GeminiAPIKey == "" {
 		return ux.MissingAPIKey()
 	}
-	return nil
-}
-
-// ValidateForWorkflow checks that all configuration needed for the full workflow is set.
-func (c *Config) ValidateForWorkflow() error {
-	if err := c.Validate(); err != nil {
-		return err
-	}
-
-	if _, err := os.Stat(c.CredentialsFile); os.IsNotExist(err) {
-		return ux.MissingCredentials(c.CredentialsFile)
-	}
-
 	return nil
 }

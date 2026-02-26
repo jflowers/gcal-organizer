@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/jflowers/gcal-organizer/pkg/models"
+	"github.com/jflowers/gcal-organizer/internal/retry"
 	"google.golang.org/api/docs/v1"
 	"google.golang.org/api/option"
 )
@@ -23,12 +23,6 @@ const ClaimEmoji = "⏳"
 
 // ClaimTTL is how long a claim is valid before it's considered stale.
 const ClaimTTL = 10 * time.Minute
-
-// AssigneeEmoji is the emoji used before the assignee name.
-const AssigneeEmoji = "👤"
-
-// DateEmoji is the emoji used before the date.
-const DateEmoji = "📅"
 
 // Service provides Google Docs operations.
 type Service struct {
@@ -68,7 +62,12 @@ func NewService(ctx context.Context, httpClient *http.Client) (*Service, error) 
 
 // GetDocument retrieves a document by ID.
 func (s *Service) GetDocument(ctx context.Context, docID string) (*docs.Document, error) {
-	doc, err := s.client.Documents.Get(docID).Do()
+	var doc *docs.Document
+	err := retry.Do(ctx, retry.DefaultConfig(), func() error {
+		var e error
+		doc, e = s.client.Documents.Get(docID).Context(ctx).Do()
+		return e
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to get document: %w", err)
 	}
@@ -186,63 +185,6 @@ func extractParagraphText(para *docs.Paragraph) string {
 		return r
 	}, text.String())
 	return strings.TrimSpace(cleaned)
-}
-
-// AnnotateActionItem adds the processed marker to an action item in the document.
-// If a claim marker exists, it is replaced with the final annotation.
-func (s *Service) AnnotateActionItem(ctx context.Context, docID string, item *models.ActionItem) error {
-	annotation := fmt.Sprintf(" %s %s %s %s %s",
-		AssigneeEmoji, item.Assignee,
-		DateEmoji, item.DueDate.Format("2006-01-02"),
-		ProcessedEmoji)
-
-	// Create the request to insert text at the end of the line
-	req := &docs.BatchUpdateDocumentRequest{
-		Requests: []*docs.Request{
-			{
-				InsertText: &docs.InsertTextRequest{
-					Location: &docs.Location{
-						Index: int64(item.LineIndex),
-					},
-					Text: annotation,
-				},
-			},
-		},
-	}
-
-	_, err := s.client.Documents.BatchUpdate(docID, req).Do()
-	if err != nil {
-		return fmt.Errorf("failed to annotate document: %w", err)
-	}
-
-	return nil
-}
-
-// ClaimActionItem writes a ⏳ claim marker to a checkbox item, signaling to
-// other instances that this item is being actively assigned. The marker includes
-// a timestamp for stale claim detection.
-func (s *Service) ClaimActionItem(ctx context.Context, docID string, endIndex int64) error {
-	claim := fmt.Sprintf(" %s%s", ClaimEmoji, time.Now().UTC().Format(time.RFC3339))
-
-	req := &docs.BatchUpdateDocumentRequest{
-		Requests: []*docs.Request{
-			{
-				InsertText: &docs.InsertTextRequest{
-					Location: &docs.Location{
-						Index: endIndex - 1, // Insert before the newline
-					},
-					Text: claim,
-				},
-			},
-		},
-	}
-
-	_, err := s.client.Documents.BatchUpdate(docID, req).Do()
-	if err != nil {
-		return fmt.Errorf("failed to claim action item: %w", err)
-	}
-
-	return nil
 }
 
 // isClaimActive checks if a line contains an active (non-expired) ⏳ claim.

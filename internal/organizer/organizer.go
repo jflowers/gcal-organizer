@@ -266,7 +266,7 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 				// Fetch actual filename from Drive
 				fileName, err := o.drive.GetFileName(ctx, att.FileID)
 				if err != nil {
-					title = fmt.Sprintf("attachment (%s...)", att.FileID[:8])
+					title = fmt.Sprintf("attachment (%s...)", att.FileID[:min(8, len(att.FileID))])
 				} else {
 					title = fileName
 				}

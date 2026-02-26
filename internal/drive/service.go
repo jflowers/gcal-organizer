@@ -107,38 +107,6 @@ func (s *Service) SetMasterFolder(ctx context.Context, folderName string) error 
 	return nil
 }
 
-// GetMasterFolderName returns the master folder name.
-func (s *Service) GetMasterFolderName() string {
-	return s.masterFolderName
-}
-
-// GetFileInfo retrieves basic file information by ID.
-func (s *Service) GetFileInfo(ctx context.Context, fileID string) (*models.Document, error) {
-	var file *drive.File
-	err := retry.Do(ctx, retry.DefaultConfig(), func() error {
-		var e error
-		file, e = s.client.Files.Get(fileID).Fields("id, name, mimeType, owners, parents, webViewLink").Do()
-		return e
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get file info: %w", err)
-	}
-	isOwned := false
-	for _, owner := range file.Owners {
-		if owner.EmailAddress == s.currentUserEmail {
-			isOwned = true
-			break
-		}
-	}
-
-	return &models.Document{
-		ID:          file.Id,
-		Name:        file.Name,
-		IsOwned:     isOwned,
-		WebViewLink: file.WebViewLink,
-	}, nil
-}
-
 // ListMeetingDocuments finds documents matching the filename pattern.
 func (s *Service) ListMeetingDocuments(ctx context.Context, keywords []string) ([]*models.Document, error) {
 	var keywordQuery string
@@ -529,26 +497,6 @@ func (s *Service) GetFileName(ctx context.Context, fileID string) (string, error
 		return "", fmt.Errorf("failed to get file: %w", err)
 	}
 	return file.Name, nil
-}
-
-// IsDocumentInFolder checks if a document is already in the specified folder.
-func (s *Service) IsDocumentInFolder(ctx context.Context, docID, folderID string) (bool, error) {
-	var file *drive.File
-	err := retry.Do(ctx, retry.DefaultConfig(), func() error {
-		var e error
-		file, e = s.client.Files.Get(docID).Fields("parents").Do()
-		return e
-	})
-	if err != nil {
-		return false, fmt.Errorf("failed to get document: %w", err)
-	}
-
-	for _, parent := range file.Parents {
-		if parent == folderID {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // IsDryRun returns whether the service is in dry-run mode.

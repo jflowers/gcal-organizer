@@ -26,8 +26,8 @@ gcal-organizer/
 │   ├── drive/                   # Google Drive operations
 │   ├── docs/                    # Google Docs parsing
 │   ├── calendar/                # Calendar operations
-│   ├── tasks/                   # Tasks API operations
 │   ├── gemini/                  # Gemini AI client
+│   ├── secrets/                 # Credential storage abstraction (keychain/file)
 │   └── organizer/               # Main orchestration
 ├── pkg/models/                  # Shared data models
 ├── scripts/                     # Browser automation (TypeScript)

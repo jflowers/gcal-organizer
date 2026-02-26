@@ -19,8 +19,8 @@
 
 **Purpose**: Add the go-keyring dependency and create the `internal/secrets/` package skeleton
 
-- [ ] T001 Add `github.com/zalando/go-keyring` v0.2.6 dependency via `go get github.com/zalando/go-keyring@v0.2.6` and promote `github.com/mattn/go-isatty` from indirect to direct dependency via `go get github.com/mattn/go-isatty`
-- [ ] T002 Create `internal/secrets/` package directory with empty files: `store.go`, `keychain.go`, `file.go`, `migrate.go`, `store_test.go`
+- [x] T001 Add `github.com/zalando/go-keyring` v0.2.6 dependency via `go get github.com/zalando/go-keyring@v0.2.6` and promote `github.com/mattn/go-isatty` from indirect to direct dependency via `go get github.com/mattn/go-isatty`
+- [x] T002 Create `internal/secrets/` package directory with empty files: `store.go`, `keychain.go`, `file.go`, `migrate.go`, `store_test.go`
 
 ---
 
@@ -32,16 +32,16 @@
 
 ### Tests
 
-- [ ] T003 [P] Write `TestKeychainStore_SetGetDelete` in `internal/secrets/store_test.go` — table-driven test using `keyring.MockInit()` to verify round-trip Set/Get/Delete for all three key constants (`KeyOAuthToken`, `KeyGeminiAPIKey`, `KeyClientCredentials`). Verify `ErrNotFound` on missing keys.
-- [ ] T004 [P] Write `TestFileStore_SetGetDelete` in `internal/secrets/store_test.go` — table-driven test using `t.TempDir()` as configDir. For `KeyOAuthToken`: verify JSON token file read/write/delete. For `KeyGeminiAPIKey`: verify `.env` line read/write/delete (preserving other lines). For `KeyClientCredentials`: verify `credentials.json` file read/write/delete. Verify `ErrNotFound` on missing keys.
-- [ ] T005 [P] Write `TestNewStore_FallbackOnNoKeyring` and `TestNewStore_FallbackOnUnavailable` in `internal/secrets/store_test.go` — verify factory returns `(FileStore, BackendFile)` when `noKeyring=true`, and returns `(FileStore, BackendFile)` with `MockInitWithError` simulating unavailable keyring.
+- [x] T003 [P] Write `TestKeychainStore_SetGetDelete` in `internal/secrets/store_test.go` — table-driven test using `keyring.MockInit()` to verify round-trip Set/Get/Delete for all three key constants (`KeyOAuthToken`, `KeyGeminiAPIKey`, `KeyClientCredentials`). Verify `ErrNotFound` on missing keys.
+- [x] T004 [P] Write `TestFileStore_SetGetDelete` in `internal/secrets/store_test.go` — table-driven test using `t.TempDir()` as configDir. For `KeyOAuthToken`: verify JSON token file read/write/delete. For `KeyGeminiAPIKey`: verify `.env` line read/write/delete (preserving other lines). For `KeyClientCredentials`: verify `credentials.json` file read/write/delete. Verify `ErrNotFound` on missing keys.
+- [x] T005 [P] Write `TestNewStore_FallbackOnNoKeyring` and `TestNewStore_FallbackOnUnavailable` in `internal/secrets/store_test.go` — verify factory returns `(FileStore, BackendFile)` when `noKeyring=true`, and returns `(FileStore, BackendFile)` with `MockInitWithError` simulating unavailable keyring.
 
 ### Implementation
 
-- [ ] T006 Implement `SecretStore` interface, `Backend` type, key constants (`KeyOAuthToken`, `KeyGeminiAPIKey`, `KeyClientCredentials`), `ServiceName` constant, `ErrNotFound` sentinel, and `NewStore(noKeyring bool) (SecretStore, Backend)` factory function in `internal/secrets/store.go` — per data-model.md. Factory probes keychain availability via sentinel key `__gcal_organizer_probe__` write/read/delete cycle (research.md R2). Uses `internal/logging.Logger` for backend selection (Info) and fallback warnings (Warn) — no verbose parameter needed.
-- [ ] T007 Implement `KeychainStore` struct with `Get`, `Set`, `Delete` methods in `internal/secrets/keychain.go` — delegates to `keyring.Get/Set/Delete(ServiceName, key)`. Map `keyring.ErrNotFound` to `secrets.ErrNotFound`. Map `keyring.ErrSetDataTooBig` to a wrapped error. `Delete` ignores `ErrNotFound`.
-- [ ] T008 Implement `FileStore` struct with `configDir` field and `Get`, `Set`, `Delete` methods in `internal/secrets/file.go` — maps keys to file operations per data-model.md table: `KeyOAuthToken` → `token.json` (JSON read/write, 0600 perms), `KeyGeminiAPIKey` → `.env` line parsing (read `GEMINI_API_KEY=` value / write-update line / delete line preserving other content), `KeyClientCredentials` → `credentials.json` (raw file read/write, 0600 perms). `Get` returns `ErrNotFound` when file or entry is absent.
-- [ ] T009 Run `go test ./internal/secrets/...` and verify T003, T004, T005 pass. Run `go vet ./internal/secrets/...` and `gofmt -l internal/secrets/`.
+- [x] T006 Implement `SecretStore` interface, `Backend` type, key constants (`KeyOAuthToken`, `KeyGeminiAPIKey`, `KeyClientCredentials`), `ServiceName` constant, `ErrNotFound` sentinel, and `NewStore(noKeyring bool) (SecretStore, Backend)` factory function in `internal/secrets/store.go` — per data-model.md. Factory probes keychain availability via sentinel key `__gcal_organizer_probe__` write/read/delete cycle (research.md R2). Uses `internal/logging.Logger` for backend selection (Info) and fallback warnings (Warn) — no verbose parameter needed.
+- [x] T007 Implement `KeychainStore` struct with `Get`, `Set`, `Delete` methods in `internal/secrets/keychain.go` — delegates to `keyring.Get/Set/Delete(ServiceName, key)`. Map `keyring.ErrNotFound` to `secrets.ErrNotFound`. Map `keyring.ErrSetDataTooBig` to a wrapped error. `Delete` ignores `ErrNotFound`.
+- [x] T008 Implement `FileStore` struct with `configDir` field and `Get`, `Set`, `Delete` methods in `internal/secrets/file.go` — maps keys to file operations per data-model.md table: `KeyOAuthToken` → `token.json` (JSON read/write, 0600 perms), `KeyGeminiAPIKey` → `.env` line parsing (read `GEMINI_API_KEY=` value / write-update line / delete line preserving other content), `KeyClientCredentials` → `credentials.json` (raw file read/write, 0600 perms). `Get` returns `ErrNotFound` when file or entry is absent.
+- [x] T009 Run `go test ./internal/secrets/...` and verify T003, T004, T005 pass. Run `go vet ./internal/secrets/...` and `gofmt -l internal/secrets/`.
 
 **Checkpoint**: SecretStore interface and both backends are functional. All foundational tests pass.
 
