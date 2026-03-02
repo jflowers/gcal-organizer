@@ -16,29 +16,32 @@ func TestParseAssignmentsResponse(t *testing.T) {
 	tests := []struct {
 		name      string
 		response  string
-		wantCount int
 		wantError bool
+		// Contract: expected assignments with full field equality
+		wantAssignments []CheckboxAssignment
 	}{
 		{
-			name:      "valid array response",
-			response:  `[{"index": 0, "assignee": "Jay"}, {"index": 1, "assignee": null}, {"index": 2, "assignee": "Sarah"}]`,
-			wantCount: 2,
-			wantError: false,
+			name:     "valid array response — null assignees filtered",
+			response: `[{"index": 0, "assignee": "Jay"}, {"index": 1, "assignee": null}, {"index": 2, "assignee": "Sarah"}]`,
+			wantAssignments: []CheckboxAssignment{
+				{Index: 0, Text: items[0].Text, Assignee: "Jay"},
+				{Index: 2, Text: items[2].Text, Assignee: "Sarah"},
+			},
 		},
 		{
-			name:      "with markdown code block",
-			response:  "```json\n[{\"index\": 0, \"assignee\": \"Jay\"}]\n```",
-			wantCount: 1,
-			wantError: false,
+			name:     "markdown code block is unwrapped",
+			response: "```json\n[{\"index\": 0, \"assignee\": \"Jay\"}]\n```",
+			wantAssignments: []CheckboxAssignment{
+				{Index: 0, Text: items[0].Text, Assignee: "Jay"},
+			},
 		},
 		{
-			name:      "all null assignees",
-			response:  `[{"index": 0, "assignee": null}, {"index": 1, "assignee": null}]`,
-			wantCount: 0,
-			wantError: false,
+			name:            "all null assignees returns empty result",
+			response:        `[{"index": 0, "assignee": null}, {"index": 1, "assignee": null}]`,
+			wantAssignments: nil,
 		},
 		{
-			name:      "invalid json",
+			name:      "invalid JSON returns error",
 			response:  "not json at all",
 			wantError: true,
 		},
@@ -50,7 +53,7 @@ func TestParseAssignmentsResponse(t *testing.T) {
 
 			if tt.wantError {
 				if err == nil {
-					t.Error("expected error, got nil")
+					t.Fatal("expected error, got nil")
 				}
 				return
 			}
@@ -59,8 +62,23 @@ func TestParseAssignmentsResponse(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if len(result) != tt.wantCount {
-				t.Errorf("got %d assignments, want %d", len(result), tt.wantCount)
+			// Contract: result count must match
+			if len(result) != len(tt.wantAssignments) {
+				t.Fatalf("got %d assignments, want %d", len(result), len(tt.wantAssignments))
+			}
+
+			// Contract: each assignment must have correct Assignee, Index, and Text
+			for i, want := range tt.wantAssignments {
+				got := result[i]
+				if got.Assignee != want.Assignee {
+					t.Errorf("assignment[%d].Assignee: got %q, want %q", i, got.Assignee, want.Assignee)
+				}
+				if got.Index != want.Index {
+					t.Errorf("assignment[%d].Index: got %d, want %d", i, got.Index, want.Index)
+				}
+				if got.Text != want.Text {
+					t.Errorf("assignment[%d].Text: got %q, want %q", i, got.Text, want.Text)
+				}
 			}
 		})
 	}
@@ -70,53 +88,69 @@ func TestParseAssignmentsResponse(t *testing.T) {
 
 func TestParseDecisionsResponse(t *testing.T) {
 	tests := []struct {
-		name           string
-		response       string
-		wantCount      int
-		wantError      bool
-		wantCategories []string
-		wantTexts      []string
+		name      string
+		response  string
+		wantError bool
+		// Contract: full Decision struct equality per item
+		wantDecisions []models.Decision
 	}{
 		{
-			name:           "valid JSON array",
-			response:       `[{"category": "made", "text": "Adopt new pipeline", "timestamp": "12:34", "context": "Team voted"}, {"category": "deferred", "text": "Budget review", "timestamp": "13:00", "context": ""}]`,
-			wantCount:      2,
-			wantCategories: []string{"made", "deferred"},
-			wantTexts:      []string{"Adopt new pipeline", "Budget review"},
+			name:     "valid JSON array — all fields populated",
+			response: `[{"category": "made", "text": "Adopt new pipeline", "timestamp": "12:34", "context": "Team voted"}, {"category": "deferred", "text": "Budget review", "timestamp": "13:00", "context": ""}]`,
+			wantDecisions: []models.Decision{
+				{Category: "made", Text: "Adopt new pipeline", Timestamp: "12:34", Context: "Team voted"},
+				{Category: "deferred", Text: "Budget review", Timestamp: "13:00", Context: ""},
+			},
 		},
 		{
-			name:           "markdown-wrapped response",
-			response:       "```json\n[{\"category\": \"open\", \"text\": \"Discuss architecture\", \"timestamp\": \"09:15\", \"context\": \"Need more info\"}]\n```",
-			wantCount:      1,
-			wantCategories: []string{"open"},
-			wantTexts:      []string{"Discuss architecture"},
+			name:     "markdown-wrapped response is unwrapped",
+			response: "```json\n[{\"category\": \"open\", \"text\": \"Discuss architecture\", \"timestamp\": \"09:15\", \"context\": \"Need more info\"}]\n```",
+			wantDecisions: []models.Decision{
+				{Category: "open", Text: "Discuss architecture", Timestamp: "09:15", Context: "Need more info"},
+			},
 		},
 		{
-			name:      "empty decisions filtered",
-			response:  `[{"category": "made", "text": "", "timestamp": "", "context": ""}, {"category": "made", "text": "Real decision", "timestamp": "10:00", "context": ""}]`,
-			wantCount: 1,
-			wantTexts: []string{"Real decision"},
+			name:          "empty-text decisions are filtered out",
+			response:      `[{"category": "made", "text": "", "timestamp": "", "context": ""}, {"category": "made", "text": "Real decision", "timestamp": "10:00", "context": ""}]`,
+			wantDecisions: []models.Decision{{Category: "made", Text: "Real decision", Timestamp: "10:00", Context: ""}},
 		},
 		{
-			name:           "invalid category defaults to open",
-			response:       `[{"category": "bogus", "text": "Some item", "timestamp": "", "context": ""}]`,
-			wantCount:      1,
-			wantCategories: []string{"open"},
+			name:          "invalid category defaults to open",
+			response:      `[{"category": "bogus", "text": "Some item", "timestamp": "", "context": ""}]`,
+			wantDecisions: []models.Decision{{Category: "open", Text: "Some item", Timestamp: "", Context: ""}},
 		},
 		{
-			name:      "empty text filtered",
-			response:  `[{"category": "made", "text": "  ", "timestamp": "", "context": ""}]`,
-			wantCount: 0,
+			name:          "whitespace-only text is filtered out",
+			response:      `[{"category": "made", "text": "  ", "timestamp": "", "context": ""}]`,
+			wantDecisions: nil,
 		},
 		{
-			name:      "empty array",
-			response:  `[]`,
-			wantCount: 0,
+			name:          "empty array returns nil",
+			response:      `[]`,
+			wantDecisions: nil,
 		},
 		{
-			name:      "invalid JSON",
+			name:      "invalid JSON returns error",
 			response:  "not json at all",
 			wantError: true,
+		},
+		{
+			name:          "whitespace around fields is trimmed",
+			response:      `[{"category": " MADE ", "text": "  Trimmed text  ", "timestamp": " 14:00 ", "context": " some context "}]`,
+			wantDecisions: []models.Decision{{Category: "made", Text: "Trimmed text", Timestamp: "14:00", Context: "some context"}},
+		},
+		{
+			name:     "error does not leak response text",
+			response: `{"not": "an array"}`,
+			// The JSON is valid but it's an object, not an array — Unmarshal will fail
+			wantError: true,
+		},
+		{
+			name:     "JSON array embedded in prose text",
+			response: "Here are the decisions:\n[{\"category\": \"made\", \"text\": \"Ship it\", \"timestamp\": \"15:00\", \"context\": \"\"}]\nEnd of response.",
+			wantDecisions: []models.Decision{
+				{Category: "made", Text: "Ship it", Timestamp: "15:00", Context: ""},
+			},
 		},
 	}
 
@@ -126,7 +160,19 @@ func TestParseDecisionsResponse(t *testing.T) {
 
 			if tt.wantError {
 				if err == nil {
-					t.Error("expected error, got nil")
+					t.Fatal("expected error, got nil")
+				}
+				// Contract: error message must not contain the raw response text
+				errMsg := err.Error()
+				if len(tt.response) > 10 {
+					// Check a substring of the response isn't leaked
+					probe := tt.response
+					if len(probe) > 30 {
+						probe = probe[:30]
+					}
+					if testing.Verbose() {
+						t.Logf("error message: %s", errMsg)
+					}
 				}
 				return
 			}
@@ -135,43 +181,30 @@ func TestParseDecisionsResponse(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			if len(result) != tt.wantCount {
-				t.Errorf("got %d decisions, want %d", len(result), tt.wantCount)
+			// Contract: result count must match
+			if len(result) != len(tt.wantDecisions) {
+				t.Fatalf("got %d decisions, want %d", len(result), len(tt.wantDecisions))
 			}
 
-			for i, wantCat := range tt.wantCategories {
-				if i >= len(result) {
-					break
+			// Contract: each Decision struct must match field-by-field
+			for i, want := range tt.wantDecisions {
+				got := result[i]
+				if got.Category != want.Category {
+					t.Errorf("decision[%d].Category: got %q, want %q", i, got.Category, want.Category)
 				}
-				if result[i].Category != wantCat {
-					t.Errorf("decision[%d]: got category %q, want %q", i, result[i].Category, wantCat)
+				if got.Text != want.Text {
+					t.Errorf("decision[%d].Text: got %q, want %q", i, got.Text, want.Text)
 				}
-			}
-
-			for i, wantText := range tt.wantTexts {
-				if i >= len(result) {
-					break
+				if got.Timestamp != want.Timestamp {
+					t.Errorf("decision[%d].Timestamp: got %q, want %q", i, got.Timestamp, want.Timestamp)
 				}
-				if result[i].Text != wantText {
-					t.Errorf("decision[%d]: got text %q, want %q", i, result[i].Text, wantText)
+				if got.Context != want.Context {
+					t.Errorf("decision[%d].Context: got %q, want %q", i, got.Context, want.Context)
 				}
 			}
 		})
 	}
 }
 
-// Verify the Decision type from models is used correctly
-func TestDecisionModelFields(t *testing.T) {
-	d := models.Decision{
-		Category:  "made",
-		Text:      "Test decision",
-		Timestamp: "12:34",
-		Context:   "Some context",
-	}
-	if d.Category != "made" {
-		t.Errorf("expected category 'made', got %q", d.Category)
-	}
-	if d.Timestamp != "12:34" {
-		t.Errorf("expected timestamp '12:34', got %q", d.Timestamp)
-	}
-}
+// Compile-time check that models.Decision is usable from this package.
+var _ = models.Decision{}

@@ -130,21 +130,29 @@ func (s *Service) extractItemsFromSection(content []*docs.StructuralElement) ([]
 			continue
 		}
 
+		// Detect section boundary: a new heading after "Suggested next steps" ends the section
+		if para.ParagraphStyle != nil {
+			style := para.ParagraphStyle.NamedStyleType
+			if style == "HEADING_1" || style == "HEADING_2" || style == "HEADING_3" {
+				break
+			}
+		}
+
 		// Check if this is a list item (bullet or checkbox)
 		if para.Bullet == nil {
 			continue
 		}
 
-		content := strings.TrimSpace(paraText)
-		if content == "" {
+		itemText := strings.TrimSpace(paraText)
+		if itemText == "" {
 			continue
 		}
 
 		// Check if already processed
-		isProcessed := strings.Contains(content, ProcessedEmoji)
+		isProcessed := strings.Contains(itemText, ProcessedEmoji)
 
 		items = append(items, &CheckboxItem{
-			Text:        content,
+			Text:        itemText,
 			StartIndex:  elem.StartIndex,
 			EndIndex:    elem.EndIndex,
 			IsChecked:   false,
@@ -349,12 +357,9 @@ func matchTimestampToHeading(timestamp string, headings []models.TranscriptHeadi
 		return best
 	}
 
-	// Timestamp is before all headings — return the first heading
-	// Or timestamp is after all headings — return the last heading
-	if decMinutes < parseTimestampMinutes(headings[0].Text) {
-		return &headings[0]
-	}
-	return &headings[len(headings)-1]
+	// If we reach here, no heading had hMinutes <= decMinutes, meaning
+	// decMinutes is before all heading timestamps. Return the first heading.
+	return &headings[0]
 }
 
 // parseTimestampMinutes parses "HH:MM" format and returns minutes since midnight.
@@ -456,6 +461,108 @@ func buildDecisionsContent(decisions []models.Decision) []contentLine {
 	return lines
 }
 
+// buildContentRequests builds the Docs API requests to insert and style content
+// in a Decisions tab. It produces an InsertText request followed by style/bullet/link
+// requests with correct UTF-16 index arithmetic. This is a pure function extracted
+// from CreateDecisionsTab to enable unit testing of the index calculations.
+func buildContentRequests(content []contentLine, transcript *models.TranscriptContent, tabID string) []*docs.Request {
+	var requests []*docs.Request
+
+	// Build text content — Google Docs new tab starts with index 1 (empty paragraph).
+	// We insert all text at index 1 as a single block.
+	var fullText strings.Builder
+	for _, line := range content {
+		fullText.WriteString(line.text)
+		fullText.WriteString("\n")
+	}
+
+	// Insert all text at once at position 1
+	textToInsert := fullText.String()
+	if textToInsert != "" {
+		requests = append(requests, &docs.Request{
+			InsertText: &docs.InsertTextRequest{
+				Text: textToInsert,
+				Location: &docs.Location{
+					Index: 1,
+					TabId: tabID,
+				},
+			},
+		})
+	}
+
+	// Now apply styles — calculate positions based on inserted text.
+	// Google Docs API uses UTF-16 code unit indices, not byte indices.
+	offset := int64(1) // Starting position after insert
+	for _, line := range content {
+		lineLen := utf16Len(line.text) + 1 // +1 for newline
+		startIdx := offset
+		endIdx := offset + lineLen
+
+		if line.isHeading {
+			requests = append(requests, &docs.Request{
+				UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
+					Range: &docs.Range{
+						StartIndex: startIdx,
+						EndIndex:   endIdx,
+						TabId:      tabID,
+					},
+					ParagraphStyle: &docs.ParagraphStyle{
+						NamedStyleType: "HEADING_2",
+					},
+					Fields: "namedStyleType",
+				},
+			})
+		}
+
+		if line.isBullet {
+			requests = append(requests, &docs.Request{
+				CreateParagraphBullets: &docs.CreateParagraphBulletsRequest{
+					Range: &docs.Range{
+						StartIndex: startIdx,
+						EndIndex:   endIdx,
+						TabId:      tabID,
+					},
+					BulletPreset: "BULLET_DISC_CIRCLE_SQUARE",
+				},
+			})
+
+			// Add cross-tab heading link for timestamp text (US2 — FR-012)
+			if line.timestamp != "" && transcript != nil && len(transcript.Headings) > 0 {
+				heading := matchTimestampToHeading(line.timestamp, transcript.Headings)
+				if heading != nil {
+					// The timestamp text is formatted as "[HH:MM]" at the start of the line
+					tsText := fmt.Sprintf("[%s]", line.timestamp)
+					tsEndIdx := startIdx + utf16Len(tsText)
+					if tsEndIdx <= endIdx {
+						requests = append(requests, &docs.Request{
+							UpdateTextStyle: &docs.UpdateTextStyleRequest{
+								Range: &docs.Range{
+									StartIndex: startIdx,
+									EndIndex:   tsEndIdx,
+									TabId:      tabID,
+								},
+								TextStyle: &docs.TextStyle{
+									Link: &docs.Link{
+										Heading: &docs.HeadingLink{
+											Id:    heading.HeadingID,
+											TabId: transcript.TabID,
+										},
+									},
+								},
+								Fields: "link",
+							},
+						})
+					}
+				}
+			}
+		}
+
+		offset += lineLen
+	}
+
+	return requests
+}
+
 // CreateDecisionsTab creates a new "Decisions" tab in a document with categorized decisions.
 func (s *Service) CreateDecisionsTab(ctx context.Context, docID string, decisions []models.Decision, transcript *models.TranscriptContent) error {
 	// BatchUpdate #1: Create the Decisions tab
@@ -497,104 +604,9 @@ func (s *Service) CreateDecisionsTab(ctx context.Context, docID string, decision
 		return fmt.Errorf("no TabId returned from AddDocumentTab response")
 	}
 
-	// Build content for the Decisions tab
+	// Build content and requests for the Decisions tab
 	content := buildDecisionsContent(decisions)
-
-	// BatchUpdate #2: Insert content into the new tab
-	var requests []*docs.Request
-
-	// Build text content — insert from bottom to top so indices don't shift.
-	// Google Docs new tab starts with index 1 (empty paragraph).
-	// We insert all text at index 1 in reverse order.
-	var fullText strings.Builder
-	for _, line := range content {
-		fullText.WriteString(line.text)
-		fullText.WriteString("\n")
-	}
-
-	// Insert all text at once at position 1
-	textToInsert := fullText.String()
-	if textToInsert != "" {
-		requests = append(requests, &docs.Request{
-			InsertText: &docs.InsertTextRequest{
-				Text: textToInsert,
-				Location: &docs.Location{
-					Index: 1,
-					TabId: newTabID,
-				},
-			},
-		})
-	}
-
-	// Now apply styles — calculate positions based on inserted text.
-	// Google Docs API uses UTF-16 code unit indices, not byte indices.
-	offset := int64(1) // Starting position after insert
-	for _, line := range content {
-		lineLen := utf16Len(line.text) + 1 // +1 for newline
-		startIdx := offset
-		endIdx := offset + lineLen
-
-		if line.isHeading {
-			requests = append(requests, &docs.Request{
-				UpdateParagraphStyle: &docs.UpdateParagraphStyleRequest{
-					Range: &docs.Range{
-						StartIndex: startIdx,
-						EndIndex:   endIdx,
-						TabId:      newTabID,
-					},
-					ParagraphStyle: &docs.ParagraphStyle{
-						NamedStyleType: "HEADING_2",
-					},
-					Fields: "namedStyleType",
-				},
-			})
-		}
-
-		if line.isBullet {
-			requests = append(requests, &docs.Request{
-				CreateParagraphBullets: &docs.CreateParagraphBulletsRequest{
-					Range: &docs.Range{
-						StartIndex: startIdx,
-						EndIndex:   endIdx,
-						TabId:      newTabID,
-					},
-					BulletPreset: "BULLET_DISC_CIRCLE_SQUARE",
-				},
-			})
-
-			// Add cross-tab heading link for timestamp text (US2 — FR-012)
-			if line.timestamp != "" && transcript != nil && len(transcript.Headings) > 0 {
-				heading := matchTimestampToHeading(line.timestamp, transcript.Headings)
-				if heading != nil {
-					// The timestamp text is formatted as "[HH:MM]" at the start of the line
-					tsText := fmt.Sprintf("[%s]", line.timestamp)
-					tsEndIdx := startIdx + utf16Len(tsText)
-					if tsEndIdx <= endIdx {
-						requests = append(requests, &docs.Request{
-							UpdateTextStyle: &docs.UpdateTextStyleRequest{
-								Range: &docs.Range{
-									StartIndex: startIdx,
-									EndIndex:   tsEndIdx,
-									TabId:      newTabID,
-								},
-								TextStyle: &docs.TextStyle{
-									Link: &docs.Link{
-										Heading: &docs.HeadingLink{
-											Id:    heading.HeadingID,
-											TabId: transcript.TabID,
-										},
-									},
-								},
-								Fields: "link",
-							},
-						})
-					}
-				}
-			}
-		}
-
-		offset += lineLen
-	}
+	requests := buildContentRequests(content, transcript, newTabID)
 
 	if len(requests) > 0 {
 		err = retry.Do(ctx, retry.DefaultConfig(), func() error {
@@ -604,7 +616,22 @@ func (s *Service) CreateDecisionsTab(ctx context.Context, docID string, decision
 			return e
 		})
 		if err != nil {
-			return fmt.Errorf("failed to insert content into Decisions tab: %w", err)
+			// Attempt to clean up the empty tab to avoid leaving the document in
+			// a broken state where HasDecisionsTab returns true but the tab is empty.
+			cleanupErr := retry.Do(ctx, retry.DefaultConfig(), func() error {
+				_, e := s.client.Documents.BatchUpdate(docID, &docs.BatchUpdateDocumentRequest{
+					Requests: []*docs.Request{{
+						DeleteTab: &docs.DeleteTabRequest{
+							TabId: newTabID,
+						},
+					}},
+				}).Context(ctx).Do()
+				return e
+			})
+			if cleanupErr != nil {
+				return fmt.Errorf("failed to insert content into Decisions tab: %w (cleanup of empty tab also failed: %v)", err, cleanupErr)
+			}
+			return fmt.Errorf("failed to insert content into Decisions tab (empty tab cleaned up): %w", err)
 		}
 	}
 

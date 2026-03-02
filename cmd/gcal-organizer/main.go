@@ -22,7 +22,9 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/auth"
 	"github.com/jflowers/gcal-organizer/internal/calendar"
 	"github.com/jflowers/gcal-organizer/internal/config"
+	"github.com/jflowers/gcal-organizer/internal/docs"
 	"github.com/jflowers/gcal-organizer/internal/drive"
+	"github.com/jflowers/gcal-organizer/internal/gemini"
 	"github.com/jflowers/gcal-organizer/internal/logging"
 	"github.com/jflowers/gcal-organizer/internal/organizer"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
@@ -31,6 +33,13 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
+
+// Compile-time interface satisfaction assertions. These catch signature mismatches
+// between concrete types and the interfaces the organizer depends on at compile
+// time rather than at runtime. Placed here (not in the defining packages) to
+// avoid circular imports between internal/organizer and internal/docs or internal/gemini.
+var _ organizer.DocsService = (*docs.Service)(nil)
+var _ organizer.GeminiService = (*gemini.Client)(nil)
 
 var (
 	// Version is set at build time
@@ -77,6 +86,28 @@ func loadConfigAndStore() (*config.Config, secrets.SecretStore, secrets.Backend,
 	store, backend := secrets.NewStore(cfg.NoKeyring)
 	cfg.LoadSecrets(store)
 	return cfg, store, backend, nil
+}
+
+// initDocsAndGeminiServices is a shared helper that initialises the Docs service
+// and Gemini client. Used by both assign-tasks (Step 3) and decision extraction (Step 4).
+func initDocsAndGeminiServices(ctx context.Context, cfg *config.Config, store secrets.SecretStore) (*docs.Service, *gemini.Client, error) {
+	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
+	if err != nil {
+		return nil, nil, ux.OAuthSetupFailed(cfg.CredentialsFile)
+	}
+	httpClient, err := oauthClient.GetClient(ctx)
+	if err != nil {
+		return nil, nil, ux.AuthFailed()
+	}
+	docsSvc, err := docs.NewService(ctx, httpClient)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to initialize Docs service: %w\n\nRun 'gcal-organizer doctor' for diagnostics", err)
+	}
+	geminiClient, err := gemini.NewClient(ctx, cfg.GeminiAPIKey, cfg.GeminiModel)
+	if err != nil {
+		return nil, nil, ux.MissingAPIKey()
+	}
+	return docsSvc, geminiClient, nil
 }
 
 // initServices initializes all Google API services and returns an Organizer.
@@ -176,34 +207,34 @@ var runCmd = &cobra.Command{
 		}
 		if len(decisionDocIDs) > 0 {
 			if dryRun {
+				// Dry-run: log what would happen without initializing services or
+				// making any API calls. This matches Step 3's dry-run pattern.
 				fmt.Printf("📋 STEP 4: Would extract decisions from %d transcript documents\n", len(decisionDocIDs))
+				for docID := range decisionDocIDs {
+					// ExtractDecisionsForDoc short-circuits in dry-run mode before
+					// touching docsSvc or geminiSvc, so nil is safe here.
+					_ = org.ExtractDecisionsForDoc(ctx, docID, nil, nil, true)
+				}
 			} else {
 				fmt.Println("📋 STEP 4: Extracting Decisions")
 				fmt.Println("───────────────────────────────────────────────────────────")
 				fmt.Printf("   Found %d transcript documents to process\n", len(decisionDocIDs))
-			}
 
-			// Initialize services once for all documents
-			docsSvc, geminiClient, initErr := initDocsAndGemini(ctx, cfg, store)
-			if initErr != nil {
-				fmt.Printf("   ⚠️  Error initializing services for Step 4: %v\n", initErr)
-			} else {
-				totalFailed := 0
-
-				for docID, source := range decisionDocIDs {
-					if !dryRun {
+				// Initialize services once for all documents
+				docsSvc, geminiClient, initErr := initDocsAndGeminiServices(ctx, cfg, store)
+				if initErr != nil {
+					fmt.Printf("   ⚠️  Error initializing services for Step 4: %v\n", initErr)
+				} else {
+					for docID, source := range decisionDocIDs {
 						fmt.Printf("   📄 Processing doc %s (source: %s)\n", docID[:min(8, len(docID))], source)
-					}
-					err := org.ExtractDecisionsForDoc(ctx, docID, docsSvc, geminiClient, dryRun)
-					if err != nil {
-						fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
-						totalFailed++
+						err := org.ExtractDecisionsForDoc(ctx, docID, docsSvc, geminiClient, false)
+						if err != nil {
+							fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
+							// Note: ExtractDecisionsForDoc already increments DecisionsFailed
+							// internally before returning the error — no external tracking needed.
+						}
 					}
 				}
-
-				// Only add externally-tracked failures; processed/skipped counts are
-				// managed internally by ExtractDecisionsForDoc via organizer stats.
-				org.AddDecisionStats(0, 0, totalFailed)
 			}
 			fmt.Println()
 		}
@@ -306,7 +337,7 @@ func truncateText(s string, maxLen int) string {
 }
 
 // configCmd, authCmd, and related sub-commands are defined in auth_config.go.
-// assignTasksCmd and its helper functions are defined in assign_tasks.go.
+// assignTasksCmd and its browser automation helpers are defined in assign_tasks.go.
 
 func init() {
 	cobra.OnInitialize(initConfig)

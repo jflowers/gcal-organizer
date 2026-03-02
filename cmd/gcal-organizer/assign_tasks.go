@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -18,9 +19,11 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/gemini"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
-	"github.com/jflowers/gcal-organizer/internal/ux"
 	"github.com/spf13/cobra"
 )
+
+// validDocID matches a Google Drive file ID (alphanumeric, hyphens, underscores).
+var validDocID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // assignTasksCmd represents the assign-tasks command.
 var assignTasksCmd = &cobra.Command{
@@ -42,6 +45,9 @@ Requires: Node.js and the browser/ directory to be set up.`,
 		docID, _ := cmd.Flags().GetString("doc")
 		if docID == "" {
 			return fmt.Errorf("--doc flag is required")
+		}
+		if !validDocID.MatchString(docID) {
+			return fmt.Errorf("invalid document ID %q: must contain only alphanumeric characters, hyphens, and underscores", docID)
 		}
 
 		cfg, store, _, err := loadConfigAndStore()
@@ -97,27 +103,8 @@ func checkDocOwnership(ctx context.Context, cfg *config.Config, store secrets.Se
 	return driveSvc.IsFileOwned(ctx, docID)
 }
 
-// initDocsAndGemini is a shared helper that initialises the Docs service and
-// Gemini client, both of which are required by every assign-tasks flow.
-func initDocsAndGemini(ctx context.Context, cfg *config.Config, store secrets.SecretStore) (*docs.Service, *gemini.Client, error) {
-	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
-	if err != nil {
-		return nil, nil, ux.OAuthSetupFailed(cfg.CredentialsFile)
-	}
-	httpClient, err := oauthClient.GetClient(ctx)
-	if err != nil {
-		return nil, nil, ux.AuthFailed()
-	}
-	docsSvc, err := docs.NewService(ctx, httpClient)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to initialize Docs service: %w\n\nRun 'gcal-organizer doctor' for diagnostics", err)
-	}
-	geminiClient, err := gemini.NewClient(ctx, cfg.GeminiAPIKey, cfg.GeminiModel)
-	if err != nil {
-		return nil, nil, ux.MissingAPIKey()
-	}
-	return docsSvc, geminiClient, nil
-}
+// initDocsAndGeminiServices is defined in main.go — it is a shared helper used
+// by both assign-tasks (Step 3) and decision extraction (Step 4).
 
 // extractUnassignedItems returns the subset of checkbox items that have not
 // yet been assigned (IsProcessed == false).
@@ -134,7 +121,7 @@ func extractUnassignedItems(checkboxes []*docs.CheckboxItem) []gemini.CheckboxIt
 
 // runAssignTasksDryRun analyses a document and prints what would be assigned.
 func runAssignTasksDryRun(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) error {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
+	docsSvc, geminiClient, err := initDocsAndGeminiServices(ctx, cfg, store)
 	if err != nil {
 		return err
 	}
@@ -196,7 +183,7 @@ type scriptOutput struct {
 
 // runAssignTasksBrowser extracts assignees then invokes the Playwright script.
 func runAssignTasksBrowser(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) error {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
+	docsSvc, geminiClient, err := initDocsAndGeminiServices(ctx, cfg, store)
 	if err != nil {
 		return err
 	}
@@ -305,13 +292,21 @@ func runBrowserScript(ctx context.Context, cfg *config.Config, docID string, ass
 	}
 
 	if err != nil {
-		// Include stderr in the error so context is preserved without double-printing.
-		return fmt.Errorf("browser automation failed: %s\n\nRun 'gcal-organizer setup-browser' to verify browser setup\nRun 'gcal-organizer doctor' for diagnostics", stderr.String())
+		// Truncate stderr to avoid leaking sensitive subprocess output (tokens, cookies, etc.)
+		stderrMsg := stderr.String()
+		const maxStderrLen = 500
+		if len(stderrMsg) > maxStderrLen {
+			stderrMsg = stderrMsg[:maxStderrLen] + "... (truncated)"
+		}
+		return fmt.Errorf("browser automation failed: %s\n\nRun 'gcal-organizer setup-browser' to verify browser setup\nRun 'gcal-organizer doctor' for diagnostics", stderrMsg)
 	}
 
-	// On success, forward any [assign] debug logs to stderr (verbose mode output).
-	if stderrStr := stderr.String(); stderrStr != "" {
-		fmt.Fprintf(os.Stderr, "%s", stderrStr)
+	// On success, forward subprocess stderr only in verbose mode to avoid
+	// leaking sensitive browser state (tokens, cookies, CDP logs) to the terminal.
+	if cfg.Verbose {
+		if stderrStr := stderr.String(); stderrStr != "" {
+			fmt.Fprintf(os.Stderr, "%s", stderrStr)
+		}
 	}
 
 	var result scriptOutput
@@ -365,7 +360,7 @@ func findBrowserDir() (string, error) {
 // runAssignTasksForDoc scans a document for unassigned checkboxes and runs
 // browser automation to assign them. Returns (assigned, failed, error).
 func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) (int, int, error) {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
+	docsSvc, geminiClient, err := initDocsAndGeminiServices(ctx, cfg, store)
 	if err != nil {
 		return 0, 0, err
 	}

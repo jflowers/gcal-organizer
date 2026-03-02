@@ -13,6 +13,10 @@ import (
 	"google.golang.org/genai"
 )
 
+// jsonArrayRegex matches a JSON array in a response string. Compiled once at
+// package init to avoid per-call allocation in parse functions.
+var jsonArrayRegex = regexp.MustCompile(`\[[\s\S]*\]`)
+
 // Client wraps the Gemini SDK for action item extraction.
 type Client struct {
 	client    *genai.Client
@@ -206,11 +210,13 @@ func parseDecisionsResponse(responseText string) ([]models.Decision, error) {
 	responseText = strings.TrimSuffix(responseText, "```")
 	responseText = strings.TrimSpace(responseText)
 
-	// Try to find JSON array in the response
-	jsonArrayRegex := regexp.MustCompile(`\[[\s\S]*\]`)
-	matches := jsonArrayRegex.FindString(responseText)
-	if matches != "" {
-		responseText = matches
+	// Try to find JSON array in the response. The greedy regex may capture
+	// more than intended if the response contains multiple arrays; we validate
+	// the extracted string with json.Valid before using it.
+	if matches := jsonArrayRegex.FindString(responseText); matches != "" {
+		if json.Valid([]byte(matches)) {
+			responseText = matches
+		}
 	}
 
 	var rawDecisions []struct {
@@ -264,11 +270,11 @@ func parseAssignmentsResponse(responseText string, items []CheckboxItem) ([]Chec
 	responseText = strings.TrimSuffix(responseText, "```")
 	responseText = strings.TrimSpace(responseText)
 
-	// Try to find JSON array in the response
-	jsonArrayRegex := regexp.MustCompile(`\[[\s\S]*\]`)
-	matches := jsonArrayRegex.FindString(responseText)
-	if matches != "" {
-		responseText = matches
+	// Try to find JSON array in the response; validate before using.
+	if matches := jsonArrayRegex.FindString(responseText); matches != "" {
+		if json.Valid([]byte(matches)) {
+			responseText = matches
+		}
 	}
 
 	var rawAssignments []struct {
