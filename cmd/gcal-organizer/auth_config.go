@@ -9,6 +9,7 @@ import (
 
 	"github.com/jflowers/gcal-organizer/internal/auth"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
+	"github.com/jflowers/gcal-organizer/internal/ux"
 	"github.com/spf13/cobra"
 )
 
@@ -167,13 +168,8 @@ var authStatusCmd = &cobra.Command{
 	},
 }
 
-// maskSecret returns a partially-redacted version of a secret string for display.
+// maskSecret is now ux.MaskSecret in internal/ux/format.go.
+// This wrapper preserves the local name for callers in this package.
 func maskSecret(s string) string {
-	if len(s) == 0 {
-		return "(not set)"
-	}
-	if len(s) <= 8 {
-		return "****"
-	}
-	return s[:4] + "****" + s[len(s)-4:]
+	return ux.MaskSecret(s)
 }

@@ -373,6 +373,22 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 			continue
 		}
 
+		// Per-event ownership cache to avoid redundant Drive API calls
+		// for the same file ID (each IsFileOwned call is an API request).
+		ownershipCache := make(map[string]bool)
+		isOwned := func(fileID string) bool {
+			if cached, ok := ownershipCache[fileID]; ok {
+				return cached
+			}
+			owned, err := o.drive.IsFileOwned(ctx, fileID)
+			if err != nil {
+				ownershipCache[fileID] = false
+				return false
+			}
+			ownershipCache[fileID] = owned
+			return owned
+		}
+
 		// Per-event tracking for decision doc deduplication
 		var eventDecisionDocID string
 		var eventDecisionSource string
@@ -401,8 +417,7 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 				strings.Contains(strings.ToLower(title), "notes") {
 				// When --owned-only is active, only collect owned docs for Step 3
 				if o.config.OwnedOnly {
-					owned, err := o.drive.IsFileOwned(ctx, att.FileID)
-					if err != nil || !owned {
+					if !isOwned(att.FileID) {
 						continue
 					}
 				}
@@ -427,8 +442,7 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 		// Collect the decision doc for this event (if any), applying --owned-only filter
 		if eventDecisionDocID != "" {
 			if o.config.OwnedOnly {
-				owned, err := o.drive.IsFileOwned(ctx, eventDecisionDocID)
-				if err != nil || !owned {
+				if !isOwned(eventDecisionDocID) {
 					eventDecisionDocID = ""
 				}
 			}
@@ -445,8 +459,7 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 
 			// When --owned-only is active, only share files we own
 			if o.config.OwnedOnly {
-				owned, err := o.drive.IsFileOwned(ctx, att.FileID)
-				if err != nil || !owned {
+				if !isOwned(att.FileID) {
 					o.stats.Skipped++
 					if o.config.DryRun {
 						o.logger.Info("Would skip sharing non-owned attachment", "attachment", att.Title)

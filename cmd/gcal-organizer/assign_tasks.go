@@ -52,9 +52,24 @@ Requires: Node.js and the browser/ directory to be set up.`,
 		cfg.Verbose = verbose
 		cfg.OwnedOnly = ownedOnly
 
+		// Initialize OAuth client once and reuse for both ownership check
+		// and Docs/Gemini services, avoiding redundant token refresh.
+		oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
+		if err != nil {
+			return ux.OAuthSetupFailed(cfg.CredentialsFile)
+		}
+		httpClient, err := oauthClient.GetClient(ctx)
+		if err != nil {
+			return ux.AuthFailed()
+		}
+
 		// When --owned-only is active, verify ownership before processing
 		if ownedOnly {
-			owned, checkErr := checkDocOwnership(ctx, cfg, store, docID)
+			driveSvc, driveErr := drive.NewService(ctx, httpClient, cfg.FilenamePattern, cfg.DryRun, cfg.Verbose)
+			if driveErr != nil {
+				return fmt.Errorf("failed to initialize Drive service: %w\n\nRun 'gcal-organizer doctor' for diagnostics", driveErr)
+			}
+			owned, checkErr := driveSvc.IsFileOwned(ctx, docID)
 			if checkErr != nil {
 				return fmt.Errorf("cannot verify ownership of document %s: %w\n\nRun 'gcal-organizer doctor' for diagnostics", docID, checkErr)
 			}
@@ -71,30 +86,21 @@ Requires: Node.js and the browser/ directory to be set up.`,
 
 		fmt.Printf("📄 Processing document: %s\n\n", docID)
 
-		if dryRun {
-			return runAssignTasksDryRun(ctx, cfg, store, docID)
+		// Initialize Docs+Gemini services using the shared httpClient
+		docsSvc, docsErr := docs.NewService(ctx, httpClient)
+		if docsErr != nil {
+			return fmt.Errorf("failed to initialize Docs service: %w\n\nRun 'gcal-organizer doctor' for diagnostics", docsErr)
 		}
-		return runAssignTasksBrowser(ctx, cfg, store, docID)
-	},
-}
+		geminiClient, geminiErr := gemini.NewClient(ctx, cfg.GeminiAPIKey, cfg.GeminiModel)
+		if geminiErr != nil {
+			return ux.MissingAPIKey()
+		}
 
-// checkDocOwnership initialises a Drive service and checks whether the
-// authenticated user owns the given document. Used by the assign-tasks
-// command to enforce --owned-only before any processing begins.
-func checkDocOwnership(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) (bool, error) {
-	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
-	if err != nil {
-		return false, fmt.Errorf("OAuth setup failed: %w", err)
-	}
-	httpClient, err := oauthClient.GetClient(ctx)
-	if err != nil {
-		return false, fmt.Errorf("authentication failed: %w", err)
-	}
-	driveSvc, err := drive.NewService(ctx, httpClient, cfg.FilenamePattern, cfg.DryRun, cfg.Verbose)
-	if err != nil {
-		return false, fmt.Errorf("failed to initialize Drive service: %w", err)
-	}
-	return driveSvc.IsFileOwned(ctx, docID)
+		if dryRun {
+			return runAssignTasksDryRunWithServices(ctx, cfg, docsSvc, geminiClient, docID)
+		}
+		return runAssignTasksBrowserWithServices(ctx, cfg, docsSvc, geminiClient, docID)
+	},
 }
 
 // initDocsAndGemini is a shared helper that initialises the Docs service and
@@ -132,13 +138,9 @@ func extractUnassignedItems(checkboxes []*docs.CheckboxItem) []gemini.CheckboxIt
 	return items
 }
 
-// runAssignTasksDryRun analyses a document and prints what would be assigned.
-func runAssignTasksDryRun(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) error {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
-	if err != nil {
-		return err
-	}
-
+// runAssignTasksDryRunWithServices analyses a document and prints what would be assigned.
+// Uses pre-initialized services to avoid redundant OAuth/Gemini client creation.
+func runAssignTasksDryRunWithServices(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, geminiClient *gemini.Client, docID string) error {
 	checkboxes, err := docsSvc.ExtractCheckboxItems(ctx, docID)
 	if err != nil {
 		return fmt.Errorf("failed to extract checkboxes: %w", err)
@@ -194,13 +196,9 @@ type scriptOutput struct {
 	Error   string             `json:"error,omitempty"`
 }
 
-// runAssignTasksBrowser extracts assignees then invokes the Playwright script.
-func runAssignTasksBrowser(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) error {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
-	if err != nil {
-		return err
-	}
-
+// runAssignTasksBrowserWithServices extracts assignees then invokes the Playwright script.
+// Uses pre-initialized services to avoid redundant OAuth/Gemini client creation.
+func runAssignTasksBrowserWithServices(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, geminiClient *gemini.Client, docID string) error {
 	checkboxes, err := docsSvc.ExtractCheckboxItems(ctx, docID)
 	if err != nil {
 		return fmt.Errorf("failed to extract checkboxes: %w", err)
@@ -253,6 +251,13 @@ func runBrowserScript(ctx context.Context, cfg *config.Config, docID string, ass
 		return fmt.Errorf("failed to serialize assignments: %w", err)
 	}
 
+	// Guard against exceeding OS argument length limits (ARG_MAX).
+	// 100 KB is a conservative limit well below typical ARG_MAX (~2 MB on Linux).
+	const maxAssignmentsJSONBytes = 100 * 1024
+	if len(assignmentsJSON) > maxAssignmentsJSONBytes {
+		return fmt.Errorf("assignments JSON too large (%d bytes, max %d); reduce the number of assignments per document", len(assignmentsJSON), maxAssignmentsJSONBytes)
+	}
+
 	browserDir, err := findBrowserDir()
 	if err != nil {
 		return err
@@ -260,7 +265,11 @@ func runBrowserScript(ctx context.Context, cfg *config.Config, docID string, ass
 
 	chromeProfile := cfg.ChromeProfilePath
 	if chromeProfile == "" {
-		chromeProfile = chromeProfilePath()
+		var profileErr error
+		chromeProfile, profileErr = chromeProfilePath()
+		if profileErr != nil {
+			return fmt.Errorf("cannot determine Chrome profile path: %w", profileErr)
+		}
 	}
 
 	fmt.Println("🌐 Launching browser automation...")
@@ -279,30 +288,12 @@ func runBrowserScript(ctx context.Context, cfg *config.Config, docID string, ass
 	cmd.Stderr = &stderr
 	cmd.Dir = browserDir
 
-	// Kill subprocess on SIGINT/SIGTERM so Chrome doesn't stay open.
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		select {
-		case <-sigCh:
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
-			browserCancel()
-		case <-browserCtx.Done():
-		}
-	}()
+	// exec.CommandContext sends SIGKILL to the subprocess when browserCtx is
+	// cancelled. browserCtx inherits from the parent ctx which is already
+	// wired to SIGINT/SIGTERM via signal.NotifyContext in the calling command.
+	// No additional signal handling is needed here.
 
 	err = cmd.Run()
-	signal.Stop(sigCh)
-	// Drain the channel: a signal that arrived in the window between cmd.Run()
-	// returning and signal.Stop() executing would otherwise sit buffered forever,
-	// and could be mistakenly delivered to a subsequent signal.Notify call on the
-	// same channel. Per the signal package docs, callers should drain after Stop.
-	select {
-	case <-sigCh:
-	default:
-	}
 
 	if err != nil {
 		// Include stderr in the error so context is preserved without double-printing.
@@ -353,7 +344,10 @@ func findBrowserDir() (string, error) {
 	}
 	browserDir := filepath.Join(filepath.Dir(execPath), "..", "browser")
 	if _, err := os.Stat(browserDir); os.IsNotExist(err) {
-		cwd, _ := os.Getwd()
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return "", fmt.Errorf("failed to determine working directory: %w", cwdErr)
+		}
 		browserDir = filepath.Join(cwd, "browser")
 	}
 	if _, err := os.Stat(browserDir); os.IsNotExist(err) {
@@ -364,12 +358,9 @@ func findBrowserDir() (string, error) {
 
 // runAssignTasksForDoc scans a document for unassigned checkboxes and runs
 // browser automation to assign them. Returns (assigned, failed, error).
-func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, store secrets.SecretStore, docID string) (int, int, error) {
-	docsSvc, geminiClient, err := initDocsAndGemini(ctx, cfg, store)
-	if err != nil {
-		return 0, 0, err
-	}
-
+// docsSvc and geminiClient should be pre-initialized by the caller to avoid
+// redundant OAuth/Gemini client creation per document.
+func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, geminiClient *gemini.Client, docID string) (int, int, error) {
 	checkboxes, err := docsSvc.ExtractCheckboxItems(ctx, docID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("extract checkboxes: %w", err)

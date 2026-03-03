@@ -18,6 +18,8 @@ func init() {
 }
 
 // SetVerbose switches the logger to debug level.
+// NOTE: Not goroutine-safe. Must only be called during initialization
+// (e.g., from cobra.OnInitialize), before any concurrent logging begins.
 func SetVerbose(verbose bool) {
 	if verbose {
 		Logger.SetLevel(log.DebugLevel)

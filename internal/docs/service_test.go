@@ -8,18 +8,254 @@ import (
 	"google.golang.org/api/docs/v1"
 )
 
+// ---------- extractItemsFromSection pure function tests ----------
+
+func TestExtractItemsFromSection_SuggestedNextSteps(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			StartIndex: 0,
+			EndIndex:   25,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 25,
+			EndIndex:   60,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Jay will schedule meeting"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 60,
+			EndIndex:   100,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Sarah will send report"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: 2 items extracted from "Suggested next steps" section
+	if len(items) != 2 {
+		t.Fatalf("expected 2 checkbox items, got %d", len(items))
+	}
+	if !strings.Contains(items[0].Text, "Jay will schedule meeting") {
+		t.Errorf("item[0] text: got %q", items[0].Text)
+	}
+	if !strings.Contains(items[1].Text, "Sarah will send report") {
+		t.Errorf("item[1] text: got %q", items[1].Text)
+	}
+}
+
+func TestExtractItemsFromSection_NoSuggestedSection(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Some other heading"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "A bullet item"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: no items when "Suggested next steps" section not found
+	if len(items) != 0 {
+		t.Errorf("expected 0 items, got %d", len(items))
+	}
+}
+
+func TestExtractItemsFromSection_ProcessedEmoji(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 25,
+			EndIndex:   80,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: ProcessedEmoji + " Already assigned"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 80,
+			EndIndex:   120,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Unprocessed task"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if !items[0].IsProcessed {
+		t.Error("expected item[0] IsProcessed=true (has ProcessedEmoji)")
+	}
+	if items[1].IsProcessed {
+		t.Error("expected item[1] IsProcessed=false")
+	}
+}
+
+func TestExtractItemsFromSection_EmptyBullet(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 25,
+			EndIndex:   30,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "   "}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: empty/whitespace-only bullets are skipped
+	if len(items) != 0 {
+		t.Errorf("expected 0 items for empty bullet, got %d", len(items))
+	}
+}
+
+func TestExtractItemsFromSection_NilParagraph(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{Paragraph: nil}, // Non-paragraph element (table, etc.)
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 25,
+			EndIndex:   50,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "A task"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: nil paragraphs are skipped without error
+	if len(items) != 1 {
+		t.Errorf("expected 1 item, got %d", len(items))
+	}
+}
+
+// ---------- utf16Len tests ----------
+
+func TestUtf16Len(t *testing.T) {
+	tests := []struct {
+		name string
+		s    string
+		want int64
+	}{
+		{"ascii", "hello", 5},
+		{"empty", "", 0},
+		{"emoji", "👍", 2},      // U+1F44D needs surrogate pair
+		{"mixed", "hi 👍", 5},   // 'h' + 'i' + ' ' + surrogate pair (2 units)
+		{"unicode", "café", 4}, // all BMP chars
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := utf16Len(tt.s)
+			if got != tt.want {
+				t.Errorf("utf16Len(%q): got %d, want %d", tt.s, got, tt.want)
+			}
+		})
+	}
+}
+
 // ---------- T010: ExtractTranscriptContent tests ----------
 
-// buildTestDoc creates a docs.Document with the given tabs for testing.
-func buildTestDoc(tabs []*docs.Tab) *docs.Document {
+// makeTestDoc creates a docs.Document with the given tabs for testing.
+func makeTestDoc(tabs []*docs.Tab) *docs.Document {
 	return &docs.Document{
 		DocumentId: "test-doc-id",
 		Tabs:       tabs,
 	}
 }
 
-// buildTab creates a tab with title, content elements, and a tabID.
-func buildTab(title, tabID string, elements []*docs.StructuralElement) *docs.Tab {
+// makeTab creates a tab with title, content elements, and a tabID.
+func makeTab(title, tabID string, elements []*docs.StructuralElement) *docs.Tab {
 	return &docs.Tab{
 		TabProperties: &docs.TabProperties{
 			Title: title,
@@ -33,8 +269,8 @@ func buildTab(title, tabID string, elements []*docs.StructuralElement) *docs.Tab
 	}
 }
 
-// buildParagraphElement creates a structural element with paragraph text and optional heading style.
-func buildParagraphElement(text string, startIndex, endIndex int64, headingStyle string, headingID string) *docs.StructuralElement {
+// makeParagraphElement creates a structural element with paragraph text and optional heading style.
+func makeParagraphElement(text string, startIndex, endIndex int64, headingStyle string, headingID string) *docs.StructuralElement {
 	para := &docs.Paragraph{
 		Elements: []*docs.ParagraphElement{
 			{
@@ -70,15 +306,15 @@ func TestExtractTranscriptContent(t *testing.T) {
 	}{
 		{
 			name: "finds Transcript tab in multi-tab doc",
-			doc: buildTestDoc([]*docs.Tab{
-				buildTab("Notes", "tab-notes", []*docs.StructuralElement{
-					buildParagraphElement("Some notes\n", 0, 11, "", ""),
+			doc: makeTestDoc([]*docs.Tab{
+				makeTab("Notes", "tab-notes", []*docs.StructuralElement{
+					makeParagraphElement("Some notes\n", 0, 11, "", ""),
 				}),
-				buildTab("Transcript", "tab-transcript", []*docs.StructuralElement{
-					buildParagraphElement("12:00\n", 0, 6, "HEADING_3", "h.abc123"),
-					buildParagraphElement("Hello everyone\n", 6, 21, "", ""),
-					buildParagraphElement("12:15\n", 21, 27, "HEADING_3", "h.def456"),
-					buildParagraphElement("Moving on to the next topic\n", 27, 55, "", ""),
+				makeTab("Transcript", "tab-transcript", []*docs.StructuralElement{
+					makeParagraphElement("12:00\n", 0, 6, "HEADING_3", "h.abc123"),
+					makeParagraphElement("Hello everyone\n", 6, 21, "", ""),
+					makeParagraphElement("12:15\n", 21, 27, "HEADING_3", "h.def456"),
+					makeParagraphElement("Moving on to the next topic\n", 27, 55, "", ""),
 				}),
 			}),
 			wantTabID:        "tab-transcript",
@@ -87,10 +323,10 @@ func TestExtractTranscriptContent(t *testing.T) {
 		},
 		{
 			name: "uses first tab content for single-tab doc",
-			doc: buildTestDoc([]*docs.Tab{
-				buildTab("", "tab-only", []*docs.StructuralElement{
-					buildParagraphElement("10:00\n", 0, 6, "HEADING_3", "h.single1"),
-					buildParagraphElement("Discussion content\n", 6, 25, "", ""),
+			doc: makeTestDoc([]*docs.Tab{
+				makeTab("", "tab-only", []*docs.StructuralElement{
+					makeParagraphElement("10:00\n", 0, 6, "HEADING_3", "h.single1"),
+					makeParagraphElement("Discussion content\n", 6, 25, "", ""),
 				}),
 			}),
 			wantTabID:        "tab-only",
@@ -99,25 +335,25 @@ func TestExtractTranscriptContent(t *testing.T) {
 		},
 		{
 			name: "returns empty TranscriptContent for doc with no transcript",
-			doc: buildTestDoc([]*docs.Tab{
-				buildTab("Notes", "tab-notes", []*docs.StructuralElement{
-					buildParagraphElement("Some notes\n", 0, 11, "", ""),
+			doc: makeTestDoc([]*docs.Tab{
+				makeTab("Notes", "tab-notes", []*docs.StructuralElement{
+					makeParagraphElement("Some notes\n", 0, 11, "", ""),
 				}),
-				buildTab("Action Items", "tab-actions", []*docs.StructuralElement{
-					buildParagraphElement("Do something\n", 0, 13, "", ""),
+				makeTab("Action Items", "tab-actions", []*docs.StructuralElement{
+					makeParagraphElement("Do something\n", 0, 13, "", ""),
 				}),
 			}),
 			wantNil: true,
 		},
 		{
 			name: "extracts H3 heading metadata",
-			doc: buildTestDoc([]*docs.Tab{
-				buildTab("Transcript", "tab-t", []*docs.StructuralElement{
-					buildParagraphElement("09:30\n", 0, 6, "HEADING_3", "h.head1"),
-					buildParagraphElement("Content here\n", 6, 19, "", ""),
-					buildParagraphElement("09:45\n", 19, 25, "HEADING_3", "h.head2"),
-					buildParagraphElement("More content\n", 25, 38, "", ""),
-					buildParagraphElement("10:00\n", 38, 44, "HEADING_3", "h.head3"),
+			doc: makeTestDoc([]*docs.Tab{
+				makeTab("Transcript", "tab-t", []*docs.StructuralElement{
+					makeParagraphElement("09:30\n", 0, 6, "HEADING_3", "h.head1"),
+					makeParagraphElement("Content here\n", 6, 19, "", ""),
+					makeParagraphElement("09:45\n", 19, 25, "HEADING_3", "h.head2"),
+					makeParagraphElement("More content\n", 25, 38, "", ""),
+					makeParagraphElement("10:00\n", 38, 44, "HEADING_3", "h.head3"),
 				}),
 			}),
 			wantTabID:        "tab-t",
@@ -294,30 +530,30 @@ func TestHasDecisionsTab(t *testing.T) {
 	}{
 		{
 			name: "returns true when Decisions tab exists",
-			doc: buildTestDoc([]*docs.Tab{
-				buildTab("Notes", "tab-notes", nil),
-				buildTab("Decisions", "tab-decisions", nil),
+			doc: makeTestDoc([]*docs.Tab{
+				makeTab("Notes", "tab-notes", nil),
+				makeTab("Decisions", "tab-decisions", nil),
 			}),
 			wantHas: true,
 		},
 		{
 			name: "returns false when no Decisions tab",
-			doc: buildTestDoc([]*docs.Tab{
-				buildTab("Notes", "tab-notes", nil),
-				buildTab("Transcript", "tab-transcript", nil),
+			doc: makeTestDoc([]*docs.Tab{
+				makeTab("Notes", "tab-notes", nil),
+				makeTab("Transcript", "tab-transcript", nil),
 			}),
 			wantHas: false,
 		},
 		{
 			name: "returns true for manually-created Decisions tab",
-			doc: buildTestDoc([]*docs.Tab{
-				buildTab("Decisions", "tab-manual-decisions", nil),
+			doc: makeTestDoc([]*docs.Tab{
+				makeTab("Decisions", "tab-manual-decisions", nil),
 			}),
 			wantHas: true,
 		},
 		{
 			name:    "returns false for empty tabs",
-			doc:     buildTestDoc([]*docs.Tab{}),
+			doc:     makeTestDoc([]*docs.Tab{}),
 			wantHas: false,
 		},
 	}

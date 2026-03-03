@@ -9,14 +9,11 @@ gcal-organizer is a tool that automates the lifecycle of meeting notes by:
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"syscall"
 
 	"github.com/jflowers/gcal-organizer/internal/auth"
@@ -149,20 +146,27 @@ var runCmd = &cobra.Command{
 			fmt.Println("───────────────────────────────────────────────────────────")
 			fmt.Printf("   Found %d Notes documents to scan for tasks\n", len(docIDs))
 
-			totalAssigned := 0
-			totalFailed := 0
+			// Initialize Docs+Gemini once for all documents to avoid
+			// redundant OAuth/Gemini client creation per document.
+			taskDocsSvc, taskGeminiClient, taskInitErr := initDocsAndGemini(ctx, cfg, store)
+			if taskInitErr != nil {
+				fmt.Printf("   ⚠️  Error initializing services for Step 3: %v\n", taskInitErr)
+			} else {
+				totalAssigned := 0
+				totalFailed := 0
 
-			for _, docID := range docIDs {
-				assigned, failed, err := runAssignTasksForDoc(ctx, cfg, store, docID)
-				if err != nil {
-					fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
-					continue
+				for _, docID := range docIDs {
+					assigned, failed, err := runAssignTasksForDoc(ctx, cfg, taskDocsSvc, taskGeminiClient, docID)
+					if err != nil {
+						fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
+						continue
+					}
+					totalAssigned += assigned
+					totalFailed += failed
 				}
-				totalAssigned += assigned
-				totalFailed += failed
-			}
 
-			org.AddTaskStats(totalAssigned, totalFailed)
+				org.AddTaskStats(totalAssigned, totalFailed)
+			}
 			fmt.Println()
 		} else if len(docIDs) > 0 && dryRun {
 			fmt.Printf("📝 STEP 3: Would scan %d Notes documents for task assignments\n", len(docIDs))
@@ -289,20 +293,10 @@ var syncCalendarCmd = &cobra.Command{
 
 // assignTasksCmd is defined in assign_tasks.go.
 
-// truncateText shortens s to at most maxLen runes, appending "..." if truncated.
-// Operates on runes (not bytes) to correctly handle multi-byte UTF-8 characters
-// that are common in task text (names, emoji, non-ASCII punctuation).
-// maxLen < 3 is clamped to 3 to avoid a negative-index panic in the slice expression.
-// Defined here because it is used by both main.go (run command) and assign_tasks.go.
+// truncateText is now ux.TruncateText in internal/ux/format.go.
+// This wrapper preserves the local name for callers in this package.
 func truncateText(s string, maxLen int) string {
-	if maxLen < 3 {
-		maxLen = 3
-	}
-	r := []rune(s)
-	if len(r) <= maxLen {
-		return s
-	}
-	return string(r[:maxLen-3]) + "..."
+	return ux.TruncateText(s, maxLen)
 }
 
 // configCmd, authCmd, and related sub-commands are defined in auth_config.go.
@@ -365,7 +359,7 @@ func initConfig() {
 		envFile = filepath.Join(home, ".gcal-organizer", ".env")
 	}
 
-	loadDotEnv(envFile, home)
+	config.LoadDotEnv(envFile, home)
 
 	viper.AutomaticEnv()
 
@@ -373,62 +367,8 @@ func initConfig() {
 	logging.SetVerbose(verbose)
 }
 
-// validEnvKey matches a valid POSIX environment variable name.
-var validEnvKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// loadDotEnv reads a .env file and sets any KEY=VALUE pairs as environment
-// variables, but only if they are not already set (env vars take precedence).
-// Tilde (~) in values is expanded to the user's home directory.
-func loadDotEnv(path, home string) {
-	f, err := os.Open(path)
-	if err != nil {
-		return // .env is optional
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := strings.TrimSpace(parts[0])
-		if !validEnvKey.MatchString(key) {
-			continue
-		}
-		val := strings.TrimSpace(parts[1])
-
-		// Strip surrounding quotes (double or single) for bash compatibility.
-		// For single-quoted values also unescape the POSIX '\'' sequence that
-		// generateEnvFile uses to embed a literal single-quote in the value.
-		if len(val) >= 2 {
-			switch {
-			case val[0] == '"' && val[len(val)-1] == '"':
-				val = val[1 : len(val)-1]
-			case val[0] == '\'' && val[len(val)-1] == '\'':
-				val = val[1 : len(val)-1]
-				// Unescape '\'' → ' (POSIX single-quote escape sequence)
-				val = strings.ReplaceAll(val, `'\''`, `'`)
-			}
-		}
-
-		// Expand ~ to home directory
-		if strings.HasPrefix(val, "~/") {
-			val = home + val[1:]
-		} else if val == "~" {
-			val = home
-		}
-
-		// Only set if not already in environment (explicit env vars win)
-		if _, exists := os.LookupEnv(key); !exists {
-			os.Setenv(key, val)
-		}
-	}
-}
+// loadDotEnv, validEnvKey, maskSecret, and truncateText have been extracted
+// to internal/config/dotenv.go and internal/ux/format.go respectively.
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {

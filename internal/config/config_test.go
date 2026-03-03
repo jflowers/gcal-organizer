@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"testing"
 )
@@ -62,6 +63,74 @@ func TestLoadOwnedOnlyFromEnv(t *testing.T) {
 	if !cfg.OwnedOnly {
 		t.Errorf("expected OwnedOnly true when GCAL_OWNED_ONLY=true, got %v", cfg.OwnedOnly)
 	}
+}
+
+// ---------- T049: LoadSecrets tests ----------
+
+type mockSecretStore struct {
+	secrets map[string]string
+}
+
+func (m *mockSecretStore) Get(key string) (string, error) {
+	if v, ok := m.secrets[key]; ok {
+		return v, nil
+	}
+	return "", fmt.Errorf("not found")
+}
+
+func (m *mockSecretStore) Set(key, value string) error { return nil }
+func (m *mockSecretStore) Delete(key string) error     { return nil }
+
+func TestLoadSecrets(t *testing.T) {
+	tests := []struct {
+		name       string
+		envKey     string
+		storeKey   string
+		wantResult string
+	}{
+		{
+			name:       "store overrides env",
+			envKey:     "env-key-123",
+			storeKey:   "store-key-456",
+			wantResult: "store-key-456",
+		},
+		{
+			name:       "env used when store empty",
+			envKey:     "env-key-789",
+			storeKey:   "",
+			wantResult: "env-key-789",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.GeminiAPIKey = tt.envKey
+
+			store := &mockSecretStore{secrets: map[string]string{}}
+			if tt.storeKey != "" {
+				store.secrets["gemini-api-key"] = tt.storeKey
+			}
+
+			cfg.LoadSecrets(store)
+
+			if cfg.GeminiAPIKey != tt.wantResult {
+				t.Errorf("GeminiAPIKey: got %q, want %q", cfg.GeminiAPIKey, tt.wantResult)
+			}
+		})
+	}
+}
+
+// ---------- T050: mustBindEnv tests ----------
+
+func TestMustBindEnv_Valid(t *testing.T) {
+	// Should not panic for valid keys
+	defer func() {
+		if r := recover(); r != nil {
+			t.Errorf("mustBindEnv panicked unexpectedly: %v", r)
+		}
+	}()
+	mustBindEnv("test_key_valid_12345", "TEST_KEY_VALID_12345")
 }
 
 func TestValidate(t *testing.T) {

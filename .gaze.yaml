@@ -1,0 +1,7 @@
+classification:
+  thresholds:
+    contractual: 65    # Default: 80. Lowered to match project signal profile.
+                       # Most exported functions score 64-79 (visibility + caller).
+                       # Gaze's own repo uses 70 for similar reasons.
+    incidental: 40     # Default: 50. Slightly lowered to reduce false positives
+                       # on truly incidental effects (debug logging, etc.).

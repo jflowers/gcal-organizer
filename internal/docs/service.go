@@ -135,16 +135,16 @@ func (s *Service) extractItemsFromSection(content []*docs.StructuralElement) ([]
 			continue
 		}
 
-		content := strings.TrimSpace(paraText)
-		if content == "" {
+		itemText := strings.TrimSpace(paraText)
+		if itemText == "" {
 			continue
 		}
 
 		// Check if already processed
-		isProcessed := strings.Contains(content, ProcessedEmoji)
+		isProcessed := strings.Contains(itemText, ProcessedEmoji)
 
 		items = append(items, &CheckboxItem{
-			Text:        content,
+			Text:        itemText,
 			StartIndex:  elem.StartIndex,
 			EndIndex:    elem.EndIndex,
 			IsChecked:   false,

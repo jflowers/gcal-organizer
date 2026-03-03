@@ -229,6 +229,97 @@ func TestNewStore_FallbackOnUnavailable(t *testing.T) {
 	}
 }
 
+// ---------- T051: Backend.String tests ----------
+
+func TestBackendString(t *testing.T) {
+	tests := []struct {
+		name    string
+		backend Backend
+		want    string
+	}{
+		{"keychain", BackendKeychain, "OS keychain"},
+		{"file", BackendFile, "plaintext files"},
+		{"unknown", Backend(99), "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.backend.String()
+			if got != tt.want {
+				t.Errorf("Backend(%d).String(): got %q, want %q", tt.backend, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------- T052: NewStore keychain success test ----------
+
+func TestNewStore_KeychainSuccess(t *testing.T) {
+	keyring.MockInit()
+
+	store, backend := NewStore(false)
+
+	if backend != BackendKeychain {
+		t.Fatalf("NewStore(noKeyring=false) with mock keyring: backend=%v, want BackendKeychain", backend)
+	}
+	if _, ok := store.(*KeychainStore); !ok {
+		t.Fatalf("NewStore(noKeyring=false): store type=%T, want *KeychainStore", store)
+	}
+}
+
+// ---------- T053: writeEnvValue / writeLines tests ----------
+
+func TestWriteEnvValue_NewFile(t *testing.T) {
+	dir := t.TempDir()
+	store := &FileStore{ConfigDir: dir}
+
+	// Set value when .env doesn't exist yet
+	err := store.Set(KeyGeminiAPIKey, "new-test-key")
+	if err != nil {
+		t.Fatalf("Set on new file: %v", err)
+	}
+
+	// Verify round-trip
+	got, err := store.Get(KeyGeminiAPIKey)
+	if err != nil {
+		t.Fatalf("Get after Set: %v", err)
+	}
+	if got != "new-test-key" {
+		t.Errorf("round-trip: got %q, want %q", got, "new-test-key")
+	}
+}
+
+func TestWriteLines_Atomic(t *testing.T) {
+	dir := t.TempDir()
+	store := &FileStore{ConfigDir: dir}
+
+	// Write a key
+	err := store.Set(KeyGeminiAPIKey, "key-1")
+	if err != nil {
+		t.Fatalf("first Set: %v", err)
+	}
+
+	// Overwrite it
+	err = store.Set(KeyGeminiAPIKey, "key-2")
+	if err != nil {
+		t.Fatalf("second Set: %v", err)
+	}
+
+	got, err := store.Get(KeyGeminiAPIKey)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "key-2" {
+		t.Errorf("expected overwritten value %q, got %q", "key-2", got)
+	}
+
+	// Verify no .tmp file left behind
+	tmpPath := dir + "/.env.tmp"
+	if _, err := os.Stat(tmpPath); err == nil {
+		t.Error("temp file should not remain after atomic write")
+	}
+}
+
 func containsLine(content, key string) bool {
 	for _, line := range strings.Split(content, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), key) {

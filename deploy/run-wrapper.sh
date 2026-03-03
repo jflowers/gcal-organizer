@@ -4,7 +4,12 @@
 
 set -euo pipefail
 
-# Source env file if it exists
+# Source env file if it exists.
+# SECURITY NOTE: This sources the .env file as shell code, meaning any shell
+# constructs (command substitution, variable expansion, etc.) will be executed.
+# The .env file is user-controlled at ~/.gcal-organizer/.env and should only
+# contain KEY='value' lines. If you need to validate its contents, ensure
+# each line matches the pattern ^[A-Z_]+=['\"]?.*['\"]?$ before sourcing.
 ENV_FILE="${HOME}/.gcal-organizer/.env"
 if [ -f "$ENV_FILE" ]; then
     set -a

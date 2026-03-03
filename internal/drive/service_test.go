@@ -7,8 +7,8 @@ import (
 	"google.golang.org/api/drive/v3"
 )
 
-// mockService creates a minimal Service for testing parseDocument logic
-func mockService() *Service {
+// setupDriveService creates a minimal Service for testing parseDocument logic
+func setupDriveService() *Service {
 	return &Service{
 		filenamePattern:  regexp.MustCompile(`(.+)\s*-\s*(\d{4}-\d{2}-\d{2})`),
 		fallbackPattern:  regexp.MustCompile(`^Notes\s*-\s*(.+)$`),
@@ -17,8 +17,75 @@ func mockService() *Service {
 	}
 }
 
+// ---------- T055: escapeQuery tests ----------
+
+func TestEscapeQuery(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"no quotes", "Meeting Notes", "Meeting Notes"},
+		{"single quote", "O'Brien's Meeting", "O\\'Brien\\'s Meeting"},
+		{"multiple quotes", "It's Jay's doc", "It\\'s Jay\\'s doc"},
+		{"quote at start", "'hello", "\\'hello"},
+		{"quote at end", "hello'", "hello\\'"},
+		{"only quote", "'", "\\'"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := escapeQuery(tt.input)
+			if got != tt.want {
+				t.Errorf("escapeQuery(%q): got %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------- T056: parseDocument edge case tests ----------
+
+func TestParseDocument_NilOwners(t *testing.T) {
+	s := setupDriveService()
+	file := &drive.File{
+		Name:   "Weekly - 2026-02-06",
+		Id:     "test-id",
+		Owners: nil,
+	}
+
+	doc, err := s.parseDocument(file)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: nil owners results in IsOwned=false
+	if doc.IsOwned {
+		t.Error("expected IsOwned=false for nil owners")
+	}
+}
+
+func TestParseDocument_EmptyParents(t *testing.T) {
+	s := setupDriveService()
+	file := &drive.File{
+		Name:    "Weekly - 2026-02-06",
+		Id:      "test-id",
+		Parents: []string{},
+	}
+
+	doc, err := s.parseDocument(file)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: empty parents results in empty ParentFolderID
+	if doc.ParentFolderID != "" {
+		t.Errorf("expected empty ParentFolderID, got %q", doc.ParentFolderID)
+	}
+}
+
 func TestParseDocument_PrimaryPattern(t *testing.T) {
-	s := mockService()
+	s := setupDriveService()
 
 	tests := []struct {
 		name            string
@@ -49,7 +116,7 @@ func TestParseDocument_PrimaryPattern(t *testing.T) {
 }
 
 func TestParseDocument_IsOwned(t *testing.T) {
-	s := mockService()
+	s := setupDriveService()
 
 	tests := []struct {
 		name      string
@@ -113,7 +180,7 @@ func TestParseDocument_IsOwned(t *testing.T) {
 }
 
 func TestParseDocument_FallbackPattern(t *testing.T) {
-	s := mockService()
+	s := setupDriveService()
 
 	tests := []struct {
 		name            string
@@ -144,7 +211,7 @@ func TestParseDocument_FallbackPattern(t *testing.T) {
 }
 
 func TestParseDocument_NoMatch(t *testing.T) {
-	s := mockService()
+	s := setupDriveService()
 
 	tests := []struct {
 		name     string
