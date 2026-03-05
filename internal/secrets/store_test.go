@@ -328,3 +328,281 @@ func containsLine(content, key string) bool {
 	}
 	return false
 }
+
+// ---------- Phase 6: Migration tests ----------
+
+// TestMigrate_TokenFromDisk verifies that token.json is migrated to the store
+// and deleted from disk.
+func TestMigrate_TokenFromDisk(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	// Create token.json on disk
+	tokenJSON := `{"access_token":"ya29.test","refresh_token":"1//test","expiry":"2026-06-01T00:00:00Z"}`
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := os.WriteFile(tokenPath, []byte(tokenJSON), 0600); err != nil {
+		t.Fatalf("write token.json: %v", err)
+	}
+
+	store := &KeychainStore{}
+	if err := Migrate(store, dir, false, false, nil); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Token should be in store
+	val, err := store.Get(KeyOAuthToken)
+	if err != nil {
+		t.Fatalf("token not in store: %v", err)
+	}
+	if val != tokenJSON {
+		t.Errorf("stored token: got %q, want %q", val, tokenJSON)
+	}
+
+	// token.json should be deleted
+	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
+		t.Error("token.json was not deleted after migration")
+	}
+}
+
+// TestMigrate_APIKeyFromEnv verifies that GEMINI_API_KEY is migrated from .env
+// to the store, and both GEMINI_API_KEY and GOOGLE_CREDENTIALS_FILE lines are
+// removed from .env while other config lines are preserved.
+func TestMigrate_APIKeyFromEnv(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	// Create .env with mixed content
+	envContent := "GEMINI_API_KEY='test-api-key-123'\nGOOGLE_CREDENTIALS_FILE='/path/to/creds'\nGCAL_MASTER_FOLDER_NAME='Meeting Notes'\n"
+	envPath := filepath.Join(dir, ".env")
+	if err := os.WriteFile(envPath, []byte(envContent), 0600); err != nil {
+		t.Fatalf("write .env: %v", err)
+	}
+
+	store := &KeychainStore{}
+	if err := Migrate(store, dir, false, false, nil); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// API key should be in store
+	val, err := store.Get(KeyGeminiAPIKey)
+	if err != nil {
+		t.Fatalf("API key not in store: %v", err)
+	}
+	if val != "test-api-key-123" {
+		t.Errorf("stored API key: got %q, want %q", val, "test-api-key-123")
+	}
+
+	// .env should still exist with non-secret config
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		t.Fatalf("read .env: %v", err)
+	}
+	content := string(data)
+
+	// GCAL_MASTER_FOLDER_NAME should be preserved
+	if !containsLine(content, "GCAL_MASTER_FOLDER_NAME") {
+		t.Error(".env missing GCAL_MASTER_FOLDER_NAME after migration")
+	}
+
+	// GEMINI_API_KEY and GOOGLE_CREDENTIALS_FILE should be removed
+	if containsLine(content, "GEMINI_API_KEY") {
+		t.Error(".env still contains GEMINI_API_KEY after migration")
+	}
+	if containsLine(content, "GOOGLE_CREDENTIALS_FILE") {
+		t.Error(".env still contains GOOGLE_CREDENTIALS_FILE after migration")
+	}
+}
+
+// TestMigrate_CredentialsNonInteractive verifies that in non-interactive mode,
+// credentials.json is migrated to the store but NOT deleted from disk.
+func TestMigrate_CredentialsNonInteractive(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	credsJSON := `{"installed":{"client_id":"123.apps.googleusercontent.com","client_secret":"GOCSPX-test"}}`
+	credsPath := filepath.Join(dir, "credentials.json")
+	if err := os.WriteFile(credsPath, []byte(credsJSON), 0600); err != nil {
+		t.Fatalf("write credentials.json: %v", err)
+	}
+
+	store := &KeychainStore{}
+	if err := Migrate(store, dir, false, false, nil); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Credentials should be in store
+	val, err := store.Get(KeyClientCredentials)
+	if err != nil {
+		t.Fatalf("credentials not in store: %v", err)
+	}
+	if val != credsJSON {
+		t.Errorf("stored credentials: got %q, want %q", val, credsJSON)
+	}
+
+	// credentials.json should still be on disk (non-interactive = no deletion)
+	if _, err := os.Stat(credsPath); os.IsNotExist(err) {
+		t.Error("credentials.json was deleted in non-interactive mode — should be preserved")
+	}
+}
+
+// TestMigrate_Idempotent verifies that running Migrate twice produces no errors
+// and no duplicate writes.
+func TestMigrate_Idempotent(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	// Create all three secret files
+	if err := os.WriteFile(filepath.Join(dir, "token.json"), []byte(`{"access_token":"ya29.test"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("GEMINI_API_KEY='test-key'\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), []byte(`{"installed":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &KeychainStore{}
+
+	// First migration
+	if err := Migrate(store, dir, false, false, nil); err != nil {
+		t.Fatalf("Migrate #1: %v", err)
+	}
+
+	// Second migration — should be no-op, no errors
+	if err := Migrate(store, dir, false, false, nil); err != nil {
+		t.Fatalf("Migrate #2 (idempotent): %v", err)
+	}
+
+	// Verify secrets are still in store
+	if _, err := store.Get(KeyOAuthToken); err != nil {
+		t.Error("token missing from store after second migration")
+	}
+	if _, err := store.Get(KeyGeminiAPIKey); err != nil {
+		t.Error("API key missing from store after second migration")
+	}
+	if _, err := store.Get(KeyClientCredentials); err != nil {
+		t.Error("credentials missing from store after second migration")
+	}
+}
+
+// TestMigrate_CredentialsInteractiveAccept verifies that in interactive mode,
+// when the user accepts deletion, credentials.json is deleted from disk.
+func TestMigrate_CredentialsInteractiveAccept(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	credsJSON := `{"installed":{"client_id":"123.apps.googleusercontent.com"}}`
+	credsPath := filepath.Join(dir, "credentials.json")
+	if err := os.WriteFile(credsPath, []byte(credsJSON), 0600); err != nil {
+		t.Fatalf("write credentials.json: %v", err)
+	}
+
+	store := &KeychainStore{}
+	// Mock prompt that returns "yes"
+	mockPrompt := func(message string) (bool, error) { return true, nil }
+
+	if err := Migrate(store, dir, true, false, mockPrompt); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Credentials should be in store
+	if _, err := store.Get(KeyClientCredentials); err != nil {
+		t.Fatalf("credentials not in store: %v", err)
+	}
+
+	// credentials.json should be deleted (user accepted)
+	if _, err := os.Stat(credsPath); !os.IsNotExist(err) {
+		t.Error("credentials.json was NOT deleted after user accepted — expected deletion")
+	}
+}
+
+// TestMigrate_CredentialsInteractiveDecline verifies that in interactive mode,
+// when the user declines deletion, credentials.json is preserved.
+func TestMigrate_CredentialsInteractiveDecline(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	credsJSON := `{"installed":{"client_id":"456.apps.googleusercontent.com"}}`
+	credsPath := filepath.Join(dir, "credentials.json")
+	if err := os.WriteFile(credsPath, []byte(credsJSON), 0600); err != nil {
+		t.Fatalf("write credentials.json: %v", err)
+	}
+
+	store := &KeychainStore{}
+	// Mock prompt that returns "no"
+	mockPrompt := func(message string) (bool, error) { return false, nil }
+
+	if err := Migrate(store, dir, true, false, mockPrompt); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	// Credentials should be in store
+	if _, err := store.Get(KeyClientCredentials); err != nil {
+		t.Fatalf("credentials not in store: %v", err)
+	}
+
+	// credentials.json should still be on disk (user declined)
+	if _, err := os.Stat(credsPath); os.IsNotExist(err) {
+		t.Error("credentials.json was deleted despite user declining")
+	}
+}
+
+// TestMigrate_PartialState verifies crash recovery: when a secret exists in
+// both the store AND on disk (simulating a crash after store.Set but before
+// file deletion), Migrate cleans up the file.
+func TestMigrate_PartialState(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	tokenJSON := `{"access_token":"ya29.partial"}`
+	tokenPath := filepath.Join(dir, "token.json")
+	if err := os.WriteFile(tokenPath, []byte(tokenJSON), 0600); err != nil {
+		t.Fatalf("write token.json: %v", err)
+	}
+
+	// Pre-populate the store (simulating crash after store.Set succeeded)
+	store := &KeychainStore{}
+	if err := store.Set(KeyOAuthToken, tokenJSON); err != nil {
+		t.Fatalf("pre-populate store: %v", err)
+	}
+
+	// Verify both exist before migration
+	if _, err := os.Stat(tokenPath); os.IsNotExist(err) {
+		t.Fatal("token.json should exist before migration")
+	}
+	if _, err := store.Get(KeyOAuthToken); err != nil {
+		t.Fatal("token should be in store before migration")
+	}
+
+	// Run migration — should clean up the file
+	if err := Migrate(store, dir, false, false, nil); err != nil {
+		t.Fatalf("Migrate (partial state): %v", err)
+	}
+
+	// Store value should be unchanged
+	val, err := store.Get(KeyOAuthToken)
+	if err != nil {
+		t.Fatalf("token missing from store: %v", err)
+	}
+	if val != tokenJSON {
+		t.Errorf("store value changed: got %q, want %q", val, tokenJSON)
+	}
+
+	// File should be cleaned up
+	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
+		t.Error("token.json should be deleted after crash-recovery migration")
+	}
+}
+
+// TestMigrate_NothingToMigrate verifies that Migrate is a no-op when no
+// plaintext secrets exist on disk.
+func TestMigrate_NothingToMigrate(t *testing.T) {
+	keyring.MockInit()
+	dir := t.TempDir()
+
+	store := &KeychainStore{}
+	if err := Migrate(store, dir, false, false, nil); err != nil {
+		t.Fatalf("Migrate with no files: %v", err)
+	}
+}
