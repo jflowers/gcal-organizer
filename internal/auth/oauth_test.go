@@ -241,3 +241,50 @@ func TestPersistingTokenSource_ErrorPropagated(t *testing.T) {
 		t.Fatal("expected error from empty token source, got nil")
 	}
 }
+
+// TestOAuthClient_LoadCredentialsFromStore verifies that NewOAuthClient reads
+// client credentials from the SecretStore first, without needing a file on disk.
+func TestOAuthClient_LoadCredentialsFromStore(t *testing.T) {
+	store := newMockStore()
+
+	// A minimal but valid OAuth2 credentials JSON for a "web" application.
+	// google.ConfigFromJSON requires at least client_id, client_secret,
+	// and at least one of auth_uri/token_uri.
+	credsJSON := `{
+		"installed": {
+			"client_id": "123-test.apps.googleusercontent.com",
+			"client_secret": "GOCSPX-test-secret",
+			"auth_uri": "https://accounts.google.com/o/oauth2/auth",
+			"token_uri": "https://oauth2.googleapis.com/token",
+			"redirect_uris": ["http://localhost"]
+		}
+	}`
+
+	// Store credentials in the mock store (no file on disk)
+	store.data[secrets.KeyClientCredentials] = credsJSON
+
+	// NewOAuthClient should succeed using the store, even though the
+	// fallback file path doesn't exist.
+	client, err := NewOAuthClient(store, "/nonexistent/credentials.json")
+	if err != nil {
+		t.Fatalf("NewOAuthClient with store credentials: %v", err)
+	}
+
+	if client.config == nil {
+		t.Fatal("expected non-nil oauth2.Config")
+	}
+	if client.config.ClientID != "123-test.apps.googleusercontent.com" {
+		t.Errorf("ClientID: got %q, want %q", client.config.ClientID, "123-test.apps.googleusercontent.com")
+	}
+}
+
+// TestOAuthClient_LoadCredentials_NeitherSource verifies that NewOAuthClient
+// returns an actionable error when credentials are in neither the store nor the file.
+func TestOAuthClient_LoadCredentials_NeitherSource(t *testing.T) {
+	store := newMockStore()
+
+	_, err := NewOAuthClient(store, "/nonexistent/credentials.json")
+	if err == nil {
+		t.Fatal("expected error when no credentials available, got nil")
+	}
+}

@@ -352,7 +352,15 @@ var initCmd = &cobra.Command{
 				apiKey = "your-gcp-api-key-here"
 			}
 
-			// Write .env
+			// Store API key in SecretStore when keychain is available (T022)
+			if apiKey != "your-gcp-api-key-here" {
+				store, backend := secrets.NewStore(false)
+				if err := store.Set(secrets.KeyGeminiAPIKey, apiKey); err == nil {
+					fmt.Println(styledPass(fmt.Sprintf("Gemini API key stored in %s", backend)))
+				}
+			}
+
+			// Write .env (non-secret config values always go here)
 			envContent := generateEnvFile(apiKey)
 			if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
 				return fmt.Errorf("failed to write .env file: %w", err)

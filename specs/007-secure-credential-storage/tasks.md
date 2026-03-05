@@ -87,9 +87,9 @@
 ### Implementation
 
 - [x] T021 [US2] Add `LoadSecrets(store secrets.SecretStore) error` method to `*Config` in `internal/config/config.go`. Check `store.Get(secrets.KeyGeminiAPIKey)` — if found, override `c.GeminiAPIKey` with the keychain value. If `ErrNotFound`, keep the existing value from `Load()` (env var / viper). `Load()` signature remains unchanged.
-- [ ] T022 [US2] Update `init` command in `cmd/gcal-organizer/selfservice.go` to store the user-provided API key in the `SecretStore` via `store.Set(KeyGeminiAPIKey, apiKey)` when keychain is available, instead of (or in addition to) writing it to `.env`.
+- [x] T022 [US2] Update `init` command in `cmd/gcal-organizer/selfservice.go` to store the user-provided API key in the `SecretStore` via `store.Set(KeyGeminiAPIKey, apiKey)` when keychain is available, instead of (or in addition to) writing it to `.env`.
 - [x] T023 [US2] Update all callers of `config.Load()` in `cmd/gcal-organizer/` to add `cfg.LoadSecrets(store)` after `config.Load()` and `secrets.NewStore()`. The `Load()` call itself is unchanged. Startup flow: `cfg, _ := config.Load()` → `store, backend := secrets.NewStore(cfg.NoKeyring)` → `cfg.LoadSecrets(store)`. Ensure `config show` still displays the masked API key correctly regardless of source.
-- [ ] T024 [US2] Run `go test ./internal/config/... ./internal/secrets/...` and verify T019-T020 pass. Run `go build ./...`.
+- [x] T024 [US2] Run `go test ./internal/config/... ./internal/secrets/...` and verify T019-T020 pass. Run `go build ./...`.
 
 **Checkpoint**: API key is loaded from keychain first, env var second. `init` stores keys in keychain. Config commands work correctly.
 
@@ -103,10 +103,10 @@
 
 ### Implementation
 
-- [ ] T025 [US3] Verify `NewOAuthClient` in `internal/auth/oauth.go` (already implemented in T013) correctly reads `KeyClientCredentials` from store first, falls back to file. Add a test `TestOAuthClient_LoadCredentialsFromStore` in `internal/auth/oauth_test.go` — pre-populate `KeyClientCredentials` in mock store with a valid `credentials.json` blob, verify `NewOAuthClient` succeeds without any file on disk.
+- [x] T025 [US3] Verify `NewOAuthClient` in `internal/auth/oauth.go` (already implemented in T013) correctly reads `KeyClientCredentials` from store first, falls back to file. Add a test `TestOAuthClient_LoadCredentialsFromStore` in `internal/auth/oauth_test.go` — pre-populate `KeyClientCredentials` in mock store with a valid `credentials.json` blob, verify `NewOAuthClient` succeeds without any file on disk.
 - [x] T026 [US3] Update `auth login` in `cmd/gcal-organizer/auth_config.go` — after successfully reading `credentials.json` for the login flow, call `store.Set(KeyClientCredentials, fileContents)` to persist the blob in the credential store.
 - [x] T027 [US3] Update `auth status` in `cmd/gcal-organizer/auth_config.go` — check for client credentials in store first (`store.Get(KeyClientCredentials)`), then file. Report presence/absence accordingly.
-- [ ] T028 [US3] Run `go test ./internal/auth/...` and verify T025 passes. Run `go build ./...`.
+- [x] T028 [US3] Run `go test ./internal/auth/...` and verify T025 passes. Run `go build ./...`.
 
 **Checkpoint**: Client credentials are stored in keychain during login. Auth commands work with credentials from either store or file.
 
