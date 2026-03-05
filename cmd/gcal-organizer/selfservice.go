@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"golang.org/x/oauth2"
 )
 
@@ -117,11 +118,44 @@ var doctorCmd = &cobra.Command{
 			failed++
 		}
 
-		// 4. OAuth token (check store first, then file fallback)
+		// 4. Secret storage backend (T041 + T052)
+		// Use config-aware store creation so --no-keyring is respected.
+		noKeyring := viper.GetBool("no-keyring")
+		store, backend := secrets.NewStore(noKeyring)
+		if backend == secrets.BackendKeychain {
+			fmt.Println(styledPass("Secrets stored in OS keychain"))
+			passed++
+		} else {
+			fmt.Println(styledWarn("Secrets stored in plaintext files"))
+			if noKeyring {
+				fmt.Println(styledFix("Remove --no-keyring flag to use OS keychain"))
+			} else {
+				fmt.Println(styledFix("Install a keyring provider (macOS Keychain, GNOME Keyring)"))
+			}
+			warned++
+		}
+
+		// Verbose: per-secret status
+		if verbose {
+			for _, secret := range []struct {
+				name string
+				key  string
+			}{
+				{"oauth-token", secrets.KeyOAuthToken},
+				{"gemini-api-key", secrets.KeyGeminiAPIKey},
+				{"credentials-json", secrets.KeyClientCredentials},
+			} {
+				if _, err := store.Get(secret.key); err == nil {
+					fmt.Println(subtleStyle.Render(fmt.Sprintf("          %s: present", secret.name)))
+				} else {
+					fmt.Println(subtleStyle.Render(fmt.Sprintf("          %s: absent", secret.name)))
+				}
+			}
+		}
+
+		// 5. OAuth token (check store first, then file fallback)
 		tokenFile := filepath.Join(configDir, "token.json")
 		tokenFound := false
-		// Try the secret store first (keychain or file-based)
-		store, backend := secrets.NewStore(false)
 		if tokData, tokErr := store.Get(secrets.KeyOAuthToken); tokErr == nil && tokData != "" {
 			var tok oauth2.Token
 			if err := json.Unmarshal([]byte(tokData), &tok); err == nil {
@@ -140,8 +174,6 @@ var doctorCmd = &cobra.Command{
 		// Fallback: check token.json on disk
 		if !tokenFound {
 			if _, err := os.Stat(tokenFile); err == nil {
-				// Use a closure so f.Close() runs immediately after use,
-				// not deferred to the end of the enclosing RunE function.
 				func() {
 					f, err := os.Open(tokenFile)
 					if err != nil {
@@ -178,14 +210,18 @@ var doctorCmd = &cobra.Command{
 			failed++
 		}
 
-		// 5. GEMINI_API_KEY
-		apiKey := os.Getenv("GEMINI_API_KEY")
+		// 6. GEMINI_API_KEY (check store first, then env/file fallback)
+		apiKey := ""
+		if val, err := store.Get(secrets.KeyGeminiAPIKey); err == nil && val != "" {
+			apiKey = val
+		}
 		if apiKey == "" {
-			// Try loading from .env
+			apiKey = os.Getenv("GEMINI_API_KEY")
+		}
+		if apiKey == "" {
 			apiKey = loadEnvValue(envFile, "GEMINI_API_KEY")
 		}
 		if apiKey != "" && apiKey != "your-gcp-api-key-here" {
-			// Use min() to avoid a panic if the key is shorter than 4 characters.
 			prefix := apiKey[:min(4, len(apiKey))]
 			fmt.Println(styledPass(fmt.Sprintf("GEMINI_API_KEY is set (%s****)", prefix)))
 			passed++

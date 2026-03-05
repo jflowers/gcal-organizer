@@ -149,7 +149,7 @@ gcal-organizer doctor
 The OAuth flow will:
 1. Open your browser to Google's consent page
 2. Ask you to authorize the app
-3. Store the token at `~/.gcal-organizer/token.json`
+3. Store the token in the OS credential store (macOS Keychain / Linux Secret Service)
 
 ---
 
@@ -252,9 +252,46 @@ rm ~/.gcal-organizer/token.json
 ## Data Privacy
 
 - **What goes to Gemini AI**: Only the text of individual checkbox items (e.g., `"@jordan review the API spec by Friday"`). Full document contents are **never** uploaded.
-- **What stays local**: OAuth tokens (`token.json`), credentials (`credentials.json`), and config are stored at `~/.gcal-organizer/` and never transmitted.
+- **What stays local**: OAuth tokens, API keys, and client credentials are stored in the OS credential store (macOS Keychain / Linux Secret Service) by default. Non-secret configuration remains in `~/.gcal-organizer/.env`. Nothing is transmitted externally.
 - **Scopes are minimal**: The app requests only the scopes it needs (see table above).
 - **Offline access**: The token includes refresh capability for long-running use.
+
+---
+
+## Credential Storage
+
+By default, all sensitive credentials are stored in the OS credential store:
+
+| Credential | Storage Location | Notes |
+|-----------|-----------------|-------|
+| OAuth token | OS keychain | Auto-migrated from `token.json` on upgrade |
+| Gemini API key | OS keychain | Auto-migrated from `.env` on upgrade |
+| Client credentials | OS keychain | Auto-migrated from `credentials.json` on upgrade |
+| Non-secret config | `~/.gcal-organizer/.env` | Folder name, days, keywords, model |
+
+### Headless / No-Keychain Environments
+
+For CI, containers, or servers without a keyring provider, use file-based fallback:
+
+```bash
+# Via CLI flag
+gcal-organizer run --no-keyring
+
+# Via environment variable
+export GCAL_NO_KEYRING=true
+```
+
+When using file-based storage, credentials remain in `~/.gcal-organizer/` as plaintext files (the pre-upgrade behavior).
+
+### Existing User Migration
+
+On first run after upgrading, credentials are automatically migrated to the OS credential store:
+
+- `token.json` is moved and the file is deleted
+- `GEMINI_API_KEY` is moved from `.env` (the line is removed; other config is preserved)
+- `credentials.json` contents are stored; you are prompted before the file is deleted (it may be shared with other tools)
+
+Migration is idempotent and transparent. Use `gcal-organizer doctor --verbose` to verify.
 
 ---
 
