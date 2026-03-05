@@ -170,8 +170,8 @@
 - [x] T046 [P] Update `man/gcal-organizer.1` — add `--no-keyring` flag description, update credential storage documentation. *(Done: man page lines 106-109 --no-keyring flag, lines 133-134 env var, lines 144-146 token.json fallback note)*
 - [x] T052 Fix `doctor` command in `cmd/gcal-organizer/selfservice.go` — replace hardcoded `secrets.NewStore(false)` (line ~124) with config-aware store creation using `loadConfigAndStore()` or passing `cfg.NoKeyring` so that `--no-keyring` and `GCAL_NO_KEYRING` are respected. Also update the Gemini API key check (lines ~182-200) to check `store.Get(secrets.KeyGeminiAPIKey)` instead of only env/file.
 - [ ] T053 Manual verification: run `gcal-organizer run` via launchd (macOS) or systemd (Linux) scheduled job. Verify the workflow completes without credential store prompts or authentication failures. Covers SC-003 and US1 acceptance scenario 3.
-- [ ] T047 Run `go test ./...` to verify all tests pass across the entire project. Run `go vet ./...` and `gofmt -l .` to verify no lint issues. Run `go mod tidy` to ensure clean go.mod/go.sum.
-- [ ] T048 Run `make ci` to verify all CI checks pass locally.
+- [x] T047 Run `go test ./...` to verify all tests pass across the entire project. Run `go vet ./...` and `gofmt -l .` to verify no lint issues. Run `go mod tidy` to ensure clean go.mod/go.sum.
+- [x] T048 Run `make ci` to verify all CI checks pass locally.
 
 ---
 

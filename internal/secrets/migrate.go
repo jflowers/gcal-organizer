@@ -116,8 +116,17 @@ func migrateAPIKey(store SecretStore, configDir string, verbose bool) error {
 	return nil
 }
 
-// stripEnvLines removes GEMINI_API_KEY and GOOGLE_CREDENTIALS_FILE lines from .env,
-// preserving all other content. Uses atomic write (temp file + rename).
+// secretKeys lists the .env variable names that are considered secrets and
+// should be stripped after migration to the credential store.
+var secretKeys = map[string]bool{
+	"GEMINI_API_KEY":          true,
+	"GOOGLE_CREDENTIALS_FILE": true,
+}
+
+// stripEnvLines removes GEMINI_API_KEY and GOOGLE_CREDENTIALS_FILE lines from
+// .env, along with any immediately preceding comment/blank lines that describe
+// the removed secret (orphaned headers). Preserves all other content. Uses
+// atomic write (temp file + rename).
 func stripEnvLines(envPath string, verbose bool) error {
 	data, err := os.ReadFile(envPath)
 	if err != nil {
@@ -128,21 +137,43 @@ func stripEnvLines(envPath string, verbose bool) error {
 	}
 
 	lines := strings.Split(string(data), "\n")
-	var kept []string
-	stripped := 0
-	for _, line := range lines {
+
+	// First pass: identify which lines are secret value lines.
+	isSecretLine := make([]bool, len(lines))
+	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
-			kept = append(kept, line)
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) == 2 && secretKeys[strings.TrimSpace(parts[0])] {
+			isSecretLine[i] = true
+		}
+	}
+
+	// Second pass: mark comment/blank lines immediately above secret lines
+	// as orphaned (they describe the removed secret).
+	remove := make([]bool, len(lines))
+	for i, isSec := range isSecretLine {
+		if !isSec {
 			continue
 		}
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) == 2 {
-			key := strings.TrimSpace(parts[0])
-			if key == "GEMINI_API_KEY" || key == "GOOGLE_CREDENTIALS_FILE" {
-				stripped++
-				continue // remove this line
+		remove[i] = true
+		// Walk backwards from the secret line, removing comment and blank lines
+		// that form the header block for this secret.
+		for j := i - 1; j >= 0; j-- {
+			trimmed := strings.TrimSpace(lines[j])
+			if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				remove[j] = true
+			} else {
+				break
 			}
+		}
+	}
+
+	var kept []string
+	stripped := 0
+	for i, line := range lines {
+		if remove[i] {
+			stripped++
+			continue
 		}
 		kept = append(kept, line)
 	}
@@ -151,8 +182,23 @@ func stripEnvLines(envPath string, verbose bool) error {
 		return nil // nothing to strip
 	}
 
+	// Collapse runs of more than two consecutive blank lines (cosmetic cleanup).
+	var collapsed []string
+	blanks := 0
+	for _, line := range kept {
+		if strings.TrimSpace(line) == "" {
+			blanks++
+			if blanks > 2 {
+				continue
+			}
+		} else {
+			blanks = 0
+		}
+		collapsed = append(collapsed, line)
+	}
+
 	// Write back atomically
-	content := strings.Join(kept, "\n")
+	content := strings.Join(collapsed, "\n")
 	if !strings.HasSuffix(content, "\n") {
 		content += "\n"
 	}
