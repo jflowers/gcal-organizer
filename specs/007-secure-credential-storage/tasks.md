@@ -35,6 +35,7 @@
 - [x] T003 [P] Write `TestKeychainStore_SetGetDelete` in `internal/secrets/store_test.go` — table-driven test using `keyring.MockInit()` to verify round-trip Set/Get/Delete for all three key constants (`KeyOAuthToken`, `KeyGeminiAPIKey`, `KeyClientCredentials`). Verify `ErrNotFound` on missing keys.
 - [x] T004 [P] Write `TestFileStore_SetGetDelete` in `internal/secrets/store_test.go` — table-driven test using `t.TempDir()` as configDir. For `KeyOAuthToken`: verify JSON token file read/write/delete. For `KeyGeminiAPIKey`: verify `.env` line read/write/delete (preserving other lines). For `KeyClientCredentials`: verify `credentials.json` file read/write/delete. Verify `ErrNotFound` on missing keys.
 - [x] T005 [P] Write `TestNewStore_FallbackOnNoKeyring` and `TestNewStore_FallbackOnUnavailable` in `internal/secrets/store_test.go` — verify factory returns `(FileStore, BackendFile)` when `noKeyring=true`, and returns `(FileStore, BackendFile)` with `MockInitWithError` simulating unavailable keyring.
+- [ ] T051 [P] Write `TestKeychainStore_SetDataTooBig` in `internal/secrets/store_test.go` — use `keyring.MockInit()` (or a custom mock that returns `keyring.ErrSetDataTooBig` on `Set`), verify `KeychainStore.Set()` returns a wrapped error. Verify the caller (or a higher-level fallback) can detect this error and fall back to `FileStore` for that specific secret. Covers spec.md edge case: "credential store has a size limit" (spec.md:126-127).
 
 ### Implementation
 
@@ -80,8 +81,8 @@
 
 ### Tests
 
-- [ ] T019 [P] [US2] Write `TestLoadSecrets_KeychainAPIKey` in `internal/config/config_test.go` — use `keyring.MockInit()`, pre-populate `KeyGeminiAPIKey` in the mock keychain, call `cfg.LoadSecrets(store)`, verify `cfg.GeminiAPIKey` is the keychain value (not the env var value when both are set).
-- [ ] T020 [P] [US2] Write `TestLoadSecrets_APIKeyFallback` in `internal/config/config_test.go` — use `keyring.MockInit()` with no API key stored, set `GEMINI_API_KEY` env var, call `cfg.LoadSecrets(store)`, verify `cfg.GeminiAPIKey` falls back to the env var value from `Load()`.
+- [x] T019 [P] [US2] Write `TestLoadSecrets_KeychainAPIKey` in `internal/config/config_test.go` — use `keyring.MockInit()`, pre-populate `KeyGeminiAPIKey` in the mock keychain, call `cfg.LoadSecrets(store)`, verify `cfg.GeminiAPIKey` is the keychain value (not the env var value when both are set). *(Done: exists as `TestLoadSecrets` "store overrides env" subtest at config_test.go:91)*
+- [x] T020 [P] [US2] Write `TestLoadSecrets_APIKeyFallback` in `internal/config/config_test.go` — use `keyring.MockInit()` with no API key stored, set `GEMINI_API_KEY` env var, call `cfg.LoadSecrets(store)`, verify `cfg.GeminiAPIKey` falls back to the env var value from `Load()`. *(Done: exists as `TestLoadSecrets` "env used when store empty" subtest at config_test.go:96)*
 
 ### Implementation
 
@@ -123,12 +124,14 @@
 - [ ] T030 [P] [US4] Write `TestMigrate_APIKeyFromEnv` in `internal/secrets/store_test.go` — create `.env` with `GEMINI_API_KEY=test123`, `GOOGLE_CREDENTIALS_FILE=/path`, and `GCAL_MASTER_FOLDER_NAME=Notes`. Call `Migrate()`. Verify API key in store. Verify `.env` retains `GCAL_MASTER_FOLDER_NAME` line but `GEMINI_API_KEY` and `GOOGLE_CREDENTIALS_FILE` lines are removed.
 - [ ] T031 [P] [US4] Write `TestMigrate_CredentialsNonInteractive` in `internal/secrets/store_test.go` — create `credentials.json` in temp dir, call `Migrate(interactive=false)`, verify credentials in store AND file still on disk (not deleted).
 - [ ] T032 [P] [US4] Write `TestMigrate_Idempotent` in `internal/secrets/store_test.go` — run `Migrate()` twice, verify second run is no-op (no errors, no duplicate writes).
+- [ ] T049 [P] [US4] Write `TestMigrate_CredentialsInteractiveAccept` in `internal/secrets/store_test.go` — create `credentials.json` in temp dir, call `Migrate(interactive=true)` with a mock prompt that returns "yes", verify credentials are in store AND file is deleted. Covers spec.md US3-S3, US4-S3, and plan.md `TestMigrate_CredentialsPrompt`.
+- [ ] T050 [P] [US4] Write `TestMigrate_PartialState` in `internal/secrets/store_test.go` — pre-populate a secret in the store AND leave the corresponding file on disk (simulating a crash after `store.Set()` but before file deletion). Call `Migrate()`, verify the file is cleaned up and the store value is unchanged. Covers spec.md edge case: "interrupted migration" (spec.md:124-125).
 
 ### Implementation
 
 - [ ] T033 [US4] Implement `Migrate` function in `internal/secrets/migrate.go` per data-model.md. Parameters: `store SecretStore, configDir string, interactive bool, verbose bool`. Logic per secret: check `store.Get()` → if `ErrNotFound`, check disk → if on disk, `store.Set()` → cleanup. For `token.json`: delete file. For `.env`: parse line-by-line, remove `GEMINI_API_KEY=` and `GOOGLE_CREDENTIALS_FILE=` lines, write back atomically (temp file + rename, per research.md R6). For `credentials.json`: if `interactive`, prompt via `huh.NewConfirm()`; if not interactive, log warning and skip deletion.
 - [ ] T034 [US4] Wire `Migrate()` into CLI startup in `cmd/gcal-organizer/main.go` — call after `NewStore()` and before command execution. Pass `isatty.IsTerminal(os.Stdin.Fd())` for the `interactive` parameter and `cfg.Verbose` for `verbose`. Only call `Migrate` when backend is `BackendKeychain` (skip for `BackendFile` since migration to file-based storage is pointless).
-- [ ] T035 [US4] Run `go test ./internal/secrets/...` and verify T029-T032 pass. Run `go build ./...`.
+- [ ] T035 [US4] Run `go test ./internal/secrets/...` and verify T029-T032, T049-T050 pass. Run `go build ./...`.
 
 **Checkpoint**: Migration works for all three secret types. Idempotent. Non-interactive mode skips `credentials.json` deletion.
 
@@ -162,9 +165,11 @@
 - [ ] T041 [P] Update `doctor` command in `cmd/gcal-organizer/selfservice.go` — add a new check reporting secret storage backend: "Secrets stored in OS keychain" (pass) or "Secrets stored in plaintext files" (warn with fix suggestion). When `--verbose`, report per-secret status (`oauth-token: present/absent`, `gemini-api-key: present/absent`, `credentials-json: present/absent`). Update the `token.json` check to handle keychain-based storage (token may not be a file anymore).
 - [x] T042 [P] Update `config show` in `cmd/gcal-organizer/auth_config.go` — replace "Token File: ..." line with "Secret storage: OS keychain" or "Secret storage: plaintext files" depending on active backend. Keep masked API key display.
 - [x] T043 [P] Update `auth status` in `cmd/gcal-organizer/auth_config.go` — report storage backend alongside authentication status.
-- [ ] T044 [P] Update `README.md` — add "Secure Credential Storage" section documenting keychain behavior, `--no-keyring` flag, `GCAL_NO_KEYRING` env var, migration behavior, and behavior comparison table (from quickstart.md).
+- [x] T044 [P] Update `README.md` — add "Secure Credential Storage" section documenting keychain behavior, `--no-keyring` flag, `GCAL_NO_KEYRING` env var, migration behavior, and behavior comparison table (from quickstart.md). *(Done: README.md lines 201-217 contain full section)*
 - [ ] T045 [P] Update `docs/SETUP.md` — update credential setup instructions to mention keychain storage as default, add guidance for headless environments and `--no-keyring` opt-out.
-- [ ] T046 [P] Update `man/gcal-organizer.1` — add `--no-keyring` flag description, update credential storage documentation.
+- [x] T046 [P] Update `man/gcal-organizer.1` — add `--no-keyring` flag description, update credential storage documentation. *(Done: man page lines 106-109 --no-keyring flag, lines 133-134 env var, lines 144-146 token.json fallback note)*
+- [ ] T052 Fix `doctor` command in `cmd/gcal-organizer/selfservice.go` — replace hardcoded `secrets.NewStore(false)` (line ~124) with config-aware store creation using `loadConfigAndStore()` or passing `cfg.NoKeyring` so that `--no-keyring` and `GCAL_NO_KEYRING` are respected. Also update the Gemini API key check (lines ~182-200) to check `store.Get(secrets.KeyGeminiAPIKey)` instead of only env/file.
+- [ ] T053 Manual verification: run `gcal-organizer run` via launchd (macOS) or systemd (Linux) scheduled job. Verify the workflow completes without credential store prompts or authentication failures. Covers SC-003 and US1 acceptance scenario 3.
 - [ ] T047 Run `go test ./...` to verify all tests pass across the entire project. Run `go vet ./...` and `gofmt -l .` to verify no lint issues. Run `go mod tidy` to ensure clean go.mod/go.sum.
 - [ ] T048 Run `make ci` to verify all CI checks pass locally.
 
@@ -203,7 +208,7 @@
 - T003, T004, T005 can run in parallel (different test functions, same file but no conflicts)
 - T010, T011, T012 can run in parallel (different test functions)
 - T019, T020 can run in parallel
-- T029, T030, T031, T032 can run in parallel
+- T029, T030, T031, T032, T049, T050 can run in parallel
 - T036, T037 can run in parallel
 - T041, T042, T043, T044, T045, T046 can all run in parallel (different files)
 - US4 and US5 can run in parallel with each other (and with US1 if team capacity allows)
