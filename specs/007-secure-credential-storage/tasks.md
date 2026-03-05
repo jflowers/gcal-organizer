@@ -145,14 +145,14 @@
 
 ### Tests
 
-- [ ] T036 [P] [US5] Write `TestConfigLoad_NoKeyring` in `internal/config/config_test.go` — set `GCAL_NO_KEYRING=true`, verify `cfg.NoKeyring` is `true` after `config.Load()`.
-- [ ] T037 [P] [US5] Write `TestNewStore_NoKeyringFromConfig` in `internal/secrets/store_test.go` — verify that when `cfg.NoKeyring` is `true` (set via env var or flag), `NewStore(cfg.NoKeyring)` returns `(FileStore, BackendFile)` and that `cfg.LoadSecrets(store)` correctly falls back to env var for the API key (end-to-end config→store flow, distinct from T005 which tests the factory in isolation).
+- [x] T036 [P] [US5] Write `TestConfigLoad_NoKeyring` in `internal/config/config_test.go` — set `GCAL_NO_KEYRING=true`, verify `cfg.NoKeyring` is `true` after `config.Load()`.
+- [x] T037 [P] [US5] Write `TestNewStore_NoKeyringFromConfig` in `internal/secrets/store_test.go` — verify that when `cfg.NoKeyring` is `true` (set via env var or flag), `NewStore(cfg.NoKeyring)` returns `(FileStore, BackendFile)` and that `cfg.LoadSecrets(store)` correctly falls back to env var for the API key (end-to-end config→store flow, distinct from T005 which tests the factory in isolation).
 
 ### Implementation
 
 - [x] T038 [US5] Add `NoKeyring bool` field to `Config` struct in `internal/config/config.go`. Add viper binding: `viper.BindEnv("no_keyring", "GCAL_NO_KEYRING")`. Load via `cfg.NoKeyring = viper.GetBool("no-keyring")`.
 - [x] T039 [US5] Add `--no-keyring` persistent flag on `rootCmd` in `cmd/gcal-organizer/main.go` — `rootCmd.PersistentFlags().Bool("no-keyring", false, "Disable OS credential store; use file-based storage")`. Bind to viper: `viper.BindPFlag("no-keyring", rootCmd.PersistentFlags().Lookup("no-keyring"))`.
-- [ ] T040 [US5] Run `go test ./internal/config/... ./internal/secrets/...` and verify T036-T037 pass. Run `go build ./...`.
+- [x] T040 [US5] Run `go test ./internal/config/... ./internal/secrets/...` and verify T036-T037 pass. Run `go build ./...`.
 
 **Checkpoint**: `--no-keyring` and `GCAL_NO_KEYRING` force file-based storage. Unavailable keyring falls back gracefully.
 

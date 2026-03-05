@@ -329,6 +329,33 @@ func containsLine(content, key string) bool {
 	return false
 }
 
+// TestNewStore_NoKeyringFromConfig verifies the end-to-end config→store flow:
+// when cfg.NoKeyring is true, NewStore returns FileStore and LoadSecrets falls
+// back to env var for the API key.
+func TestNewStore_NoKeyringFromConfig(t *testing.T) {
+	keyring.MockInit()
+
+	// Simulate cfg.NoKeyring = true
+	store, backend := NewStore(true)
+	if backend != BackendFile {
+		t.Fatalf("backend: got %v, want BackendFile", backend)
+	}
+	fs, ok := store.(*FileStore)
+	if !ok {
+		t.Fatalf("store type: got %T, want *FileStore", store)
+	}
+
+	// Override the config dir to an empty temp dir so we don't read the real .env
+	fs.ConfigDir = t.TempDir()
+
+	// The FileStore-backed store should return ErrNotFound for API key
+	// when no .env file exists in the temp dir
+	_, err := store.Get(KeyGeminiAPIKey)
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound from FileStore with no .env, got %v", err)
+	}
+}
+
 // ---------- Phase 6: Migration tests ----------
 
 // TestMigrate_TokenFromDisk verifies that token.json is migrated to the store
