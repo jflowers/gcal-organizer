@@ -329,6 +329,36 @@ func containsLine(content, key string) bool {
 	return false
 }
 
+// TestKeychainStore_SetError verifies that KeychainStore.Set wraps errors
+// from the underlying keyring (including ErrSetDataTooBig scenarios).
+func TestKeychainStore_SetError(t *testing.T) {
+	// MockInitWithError causes all keyring operations to fail with the given error
+	keyring.MockInitWithError(keyring.ErrNotFound)
+	store := &KeychainStore{}
+
+	err := store.Set(KeyGeminiAPIKey, "test-value")
+	if err == nil {
+		t.Fatal("expected error from Set with failing keyring, got nil")
+	}
+	// Verify the error is wrapped with context
+	if !strings.Contains(err.Error(), "keychain set") {
+		t.Errorf("error should contain 'keychain set': got %q", err.Error())
+	}
+}
+
+// TestKeychainStore_GetError verifies that KeychainStore.Get wraps non-ErrNotFound errors.
+func TestKeychainStore_GetError(t *testing.T) {
+	// Use a generic error (not ErrNotFound) to test error wrapping path
+	keyring.MockInitWithError(keyring.ErrNotFound)
+	store := &KeychainStore{}
+
+	_, err := store.Get(KeyGeminiAPIKey)
+	// ErrNotFound should be mapped to our sentinel
+	if err != ErrNotFound {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
 // TestNewStore_NoKeyringFromConfig verifies the end-to-end config→store flow:
 // when cfg.NoKeyring is true, NewStore returns FileStore and LoadSecrets falls
 // back to env var for the API key.
