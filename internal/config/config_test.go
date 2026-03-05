@@ -133,6 +133,22 @@ func TestMustBindEnv_Valid(t *testing.T) {
 	mustBindEnv("test_key_valid_12345", "TEST_KEY_VALID_12345")
 }
 
+// TestConfigLoad_NoKeyring verifies that GCAL_NO_KEYRING=true causes
+// cfg.NoKeyring to be true after Load().
+func TestConfigLoad_NoKeyring(t *testing.T) {
+	os.Setenv("GCAL_NO_KEYRING", "true")
+	defer os.Unsetenv("GCAL_NO_KEYRING")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() failed: %v", err)
+	}
+
+	if !cfg.NoKeyring {
+		t.Error("expected NoKeyring=true when GCAL_NO_KEYRING=true, got false")
+	}
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
 		name      string
