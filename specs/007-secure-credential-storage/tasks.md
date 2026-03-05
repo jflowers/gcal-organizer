@@ -56,9 +56,9 @@
 
 ### Tests
 
-- [ ] T010 [P] [US1] Write `TestOAuthClient_LoadFromStore` in `internal/auth/oauth_test.go` — create a mock `SecretStore` (or use `keyring.MockInit()` + `KeychainStore`), pre-populate a JSON-serialized `oauth2.Token`, verify `loadToken()` retrieves and deserializes it correctly.
-- [ ] T011 [P] [US1] Write `TestOAuthClient_SaveToStore` in `internal/auth/oauth_test.go` — verify `saveToken()` JSON-serializes and stores via `store.Set(KeyOAuthToken, ...)`.
-- [ ] T012 [P] [US1] Write `TestPersistingTokenSource` in `internal/auth/oauth_test.go` — create a mock `TokenSource` that returns a different token on second call (simulating refresh). Verify `persistingTokenSource.Token()` calls `store.Set` only when the token changes, and does not call `store.Set` when the token is unchanged.
+- [x] T010 [P] [US1] Write `TestOAuthClient_LoadFromStore` in `internal/auth/oauth_test.go` — create a mock `SecretStore` (or use `keyring.MockInit()` + `KeychainStore`), pre-populate a JSON-serialized `oauth2.Token`, verify `loadToken()` retrieves and deserializes it correctly.
+- [x] T011 [P] [US1] Write `TestOAuthClient_SaveToStore` in `internal/auth/oauth_test.go` — verify `saveToken()` JSON-serializes and stores via `store.Set(KeyOAuthToken, ...)`.
+- [x] T012 [P] [US1] Write `TestPersistingTokenSource` in `internal/auth/oauth_test.go` — create a mock `TokenSource` that returns a different token on second call (simulating refresh). Verify `persistingTokenSource.Token()` calls `store.Set` only when the token changes, and does not call `store.Set` when the token is unchanged.
 
 ### Implementation
 
@@ -67,7 +67,7 @@
 - [x] T015 [US1] Implement `persistingTokenSource` struct in `internal/auth/oauth.go` — fields: `base oauth2.TokenSource`, `store secrets.SecretStore`, `current *oauth2.Token`, `mu sync.Mutex`. `Token()` method: call `base.Token()`, compare `AccessToken` and `Expiry` with `current`, if different call `saveToken` equivalent via `store.Set`, update `current`, return token. Per research.md R3.
 - [x] T016 [US1] Update `GetClient()` in `internal/auth/oauth.go` to wrap the `oauth2.Config.TokenSource(ctx, tok)` with `persistingTokenSource` before creating `oauth2.NewClient(ctx, persistingTS)`.
 - [x] T017 [US1] Update all callers of `NewOAuthClient` in `cmd/gcal-organizer/` — pass the `SecretStore` instance and `cfg.CredentialsFile` as fallback path. Update `auth_config.go` (`auth login`, `auth status`) and any command `RunE` functions that create an `OAuthClient`.
-- [ ] T018 [US1] Run `go test ./internal/auth/... ./internal/secrets/...` and verify T010-T012 pass. Run `go build ./...` to verify no compilation errors across the project.
+- [x] T018 [US1] Run `go test ./internal/auth/... ./internal/secrets/...` and verify T010-T012 pass. Run `go build ./...` to verify no compilation errors across the project.
 
 **Checkpoint**: OAuth tokens are stored in and loaded from the SecretStore. Token refresh is persisted. `auth login` and `auth status` work with the new backend.
 
