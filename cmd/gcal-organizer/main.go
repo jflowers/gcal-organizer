@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/charmbracelet/huh"
 	"github.com/jflowers/gcal-organizer/internal/auth"
 	"github.com/jflowers/gcal-organizer/internal/calendar"
 	"github.com/jflowers/gcal-organizer/internal/config"
@@ -24,6 +25,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/organizer"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/jflowers/gcal-organizer/internal/ux"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -66,6 +68,10 @@ Use the subcommands to run specific operations or 'run' for the full workflow.`,
 // loadConfigAndStore loads configuration and creates a SecretStore.
 // This is the standard startup sequence for all commands that need secrets.
 // Returns the backend so callers can display it without re-probing the keychain.
+//
+// When the keychain backend is active, it runs auto-migration to transparently
+// move any plaintext secrets (token.json, .env API key, credentials.json) into
+// the OS credential store.
 func loadConfigAndStore() (*config.Config, secrets.SecretStore, secrets.Backend, error) {
 	cfg, err := config.Load()
 	if err != nil {
@@ -73,6 +79,38 @@ func loadConfigAndStore() (*config.Config, secrets.SecretStore, secrets.Backend,
 	}
 	store, backend := secrets.NewStore(cfg.NoKeyring)
 	cfg.LoadSecrets(store)
+
+	// Auto-migrate plaintext secrets to the credential store (T034).
+	// Only runs when the keychain backend is active — migrating to file-based
+	// storage is pointless.
+	if backend == secrets.BackendKeychain {
+		home, _ := os.UserHomeDir()
+		configDir := filepath.Join(home, ".gcal-organizer")
+		interactive := isatty.IsTerminal(os.Stdin.Fd())
+
+		// Default prompt using huh for interactive credentials.json deletion
+		promptFn := func(message string) (bool, error) {
+			var confirm bool
+			form := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title(message).
+						Affirmative("Yes, delete it").
+						Negative("No, keep it").
+						Value(&confirm),
+				),
+			)
+			if err := form.Run(); err != nil {
+				return false, err
+			}
+			return confirm, nil
+		}
+
+		if err := secrets.Migrate(store, configDir, interactive, cfg.Verbose, promptFn); err != nil {
+			logging.Logger.Warn("Secret migration failed", "error", err)
+		}
+	}
+
 	return cfg, store, backend, nil
 }
 
