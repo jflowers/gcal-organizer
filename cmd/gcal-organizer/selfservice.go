@@ -103,36 +103,46 @@ var doctorCmd = &cobra.Command{
 			failed++
 		}
 
-		// 3. credentials.json
+		// 3. Secret storage backend — must come before credential checks so
+		// migration runs first and the store is available for store-first lookups.
+		// Uses loadConfigAndStore() so --no-keyring is respected AND auto-migration
+		// triggers (moves token.json, .env secrets, credentials.json to keychain).
+		_, store, backend, storeErr := loadConfigAndStore()
+		if storeErr != nil {
+			// Fallback: create store directly if config load fails (e.g., during
+			// initial setup when .env doesn't exist yet).
+			noKeyring := viper.GetBool("no-keyring")
+			store, backend = secrets.NewStore(noKeyring)
+		}
+		if backend == secrets.BackendKeychain {
+			fmt.Println(styledPass("Secrets stored in OS keychain"))
+			passed++
+		} else {
+			fmt.Println(styledWarn("Secrets stored in plaintext files"))
+			if viper.GetBool("no-keyring") {
+				fmt.Println(styledFix("Remove --no-keyring flag to use OS keychain"))
+			} else {
+				fmt.Println(styledFix("Install a keyring provider (macOS Keychain, GNOME Keyring)"))
+			}
+			warned++
+		}
+
+		// 4. credentials.json (check store first, then file fallback)
 		credFile := filepath.Join(configDir, "credentials.json")
-		if _, err := os.Stat(credFile); err == nil {
+		if _, credErr := store.Get(secrets.KeyClientCredentials); credErr == nil {
+			fmt.Println(styledPass("Google credentials found (in secret store)"))
+			passed++
+		} else if _, err := os.Stat(credFile); err == nil {
 			fmt.Println(styledPass("Google credentials (credentials.json) found"))
 			if verbose {
 				fmt.Println(subtleStyle.Render("          " + credFile))
 			}
 			passed++
 		} else {
-			fmt.Println(styledFail("Google credentials not found at " + credFile))
+			fmt.Println(styledFail("Google credentials not found"))
 			fmt.Println(styledFix("Download from https://console.cloud.google.com/apis/credentials"))
 			fmt.Println(subtleStyle.Render("          Save as ~/.gcal-organizer/credentials.json"))
 			failed++
-		}
-
-		// 4. Secret storage backend (T041 + T052)
-		// Use config-aware store creation so --no-keyring is respected.
-		noKeyring := viper.GetBool("no-keyring")
-		store, backend := secrets.NewStore(noKeyring)
-		if backend == secrets.BackendKeychain {
-			fmt.Println(styledPass("Secrets stored in OS keychain"))
-			passed++
-		} else {
-			fmt.Println(styledWarn("Secrets stored in plaintext files"))
-			if noKeyring {
-				fmt.Println(styledFix("Remove --no-keyring flag to use OS keychain"))
-			} else {
-				fmt.Println(styledFix("Install a keyring provider (macOS Keychain, GNOME Keyring)"))
-			}
-			warned++
 		}
 
 		// Verbose: per-secret status
@@ -367,6 +377,10 @@ var initCmd = &cobra.Command{
 			fmt.Println(styledPass("Config directory already exists"))
 		}
 
+		// Create store early so it's available for all checks below.
+		noKeyring := viper.GetBool("no-keyring")
+		store, backend := secrets.NewStore(noKeyring)
+
 		// 2. Generate .env file
 		if _, err := os.Stat(envFile); os.IsNotExist(err) {
 			// Get API key
@@ -389,15 +403,18 @@ var initCmd = &cobra.Command{
 			}
 
 			// Store API key in SecretStore when keychain is available (T022)
+			storedInKeychain := false
 			if apiKey != "your-gcp-api-key-here" {
-				store, backend := secrets.NewStore(false)
 				if err := store.Set(secrets.KeyGeminiAPIKey, apiKey); err == nil {
 					fmt.Println(styledPass(fmt.Sprintf("Gemini API key stored in %s", backend)))
+					if backend == secrets.BackendKeychain {
+						storedInKeychain = true
+					}
 				}
 			}
 
-			// Write .env (non-secret config values always go here)
-			envContent := generateEnvFile(apiKey)
+			// Write .env — omit secrets when they're safely in the keychain
+			envContent := generateEnvFile(apiKey, storedInKeychain)
 			if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
 				return fmt.Errorf("failed to write .env file: %w", err)
 			}
@@ -410,25 +427,39 @@ var initCmd = &cobra.Command{
 			}
 		}
 
-		// 3. Check for credentials.json
+		// 3. Check for credentials.json (store first, then file fallback)
 		credFile := filepath.Join(configDir, "credentials.json")
-		if _, err := os.Stat(credFile); os.IsNotExist(err) {
+		hasCreds := false
+		if _, credErr := store.Get(secrets.KeyClientCredentials); credErr == nil {
+			fmt.Println(styledPass("Google credentials found (in secret store)"))
+			hasCreds = true
+		} else if _, err := os.Stat(credFile); err == nil {
+			fmt.Println(styledPass("Google credentials found"))
+			hasCreds = true
+		} else {
 			fmt.Println()
 			fmt.Println(styledWarn("credentials.json not found"))
 			fmt.Println(styledFix("Download OAuth credentials from Google Cloud Console:"))
 			fmt.Println(subtleStyle.Render("     https://console.cloud.google.com/apis/credentials"))
 			fmt.Println(subtleStyle.Render("     Save as: ~/.gcal-organizer/credentials.json"))
-		} else {
-			fmt.Println(styledPass("Google credentials found"))
 		}
 
 		fmt.Println()
 		var nextSteps string
-		if _, err := os.Stat(credFile); os.IsNotExist(err) {
+		if !hasCreds {
 			nextSteps = "  Next steps:\n  1. Download credentials.json (see above)\n  2. Run 'gcal-organizer auth login'"
 		} else {
-			tokenFile := filepath.Join(configDir, "token.json")
-			if _, err := os.Stat(tokenFile); os.IsNotExist(err) {
+			// Check store first for token, then file fallback
+			hasToken := false
+			if _, tokErr := store.Get(secrets.KeyOAuthToken); tokErr == nil {
+				hasToken = true
+			} else {
+				tokenFile := filepath.Join(configDir, "token.json")
+				if _, err := os.Stat(tokenFile); err == nil {
+					hasToken = true
+				}
+			}
+			if !hasToken {
 				nextSteps = "  Next steps:\n  1. Run 'gcal-organizer auth login'"
 			} else {
 				nextSteps = "  Next steps:\n  1. Run 'gcal-organizer run --dry-run' to test"
@@ -569,21 +600,31 @@ func loadEnvValue(envFile, key string) string {
 }
 
 // generateEnvFile creates the .env file content.
-// All values are double-quoted for bash source compatibility.
-func generateEnvFile(apiKey string) string {
-	home := mustUserHomeDir()
+// When storedInKeychain is true, secrets (GEMINI_API_KEY and
+// GOOGLE_CREDENTIALS_FILE) are omitted since they live in the OS credential
+// store. This avoids the write-then-migrate cycle where init writes secrets
+// to .env and migration immediately strips them.
+func generateEnvFile(apiKey string, storedInKeychain bool) string {
 	var b strings.Builder
 	b.WriteString("# GCal Organizer Configuration\n")
 	b.WriteString("# Generated by 'gcal-organizer init'\n\n")
-	b.WriteString("# Required: GCP API Key for Gemini AI\n")
-	// Single-quote the value so shell treats it as a literal string, preventing
-	// injection via $, `, or " characters in the API key. A single-quote inside
-	// the value is escaped with the POSIX '\'' sequence, which closes the
-	// current single-quoted string, inserts a literal ', then re-opens it.
-	escapedKey := strings.ReplaceAll(apiKey, "'", "'\\''")
-	b.WriteString(fmt.Sprintf("GEMINI_API_KEY='%s'\n\n", escapedKey))
-	b.WriteString("# Required: Path to Google OAuth2 credentials\n")
-	b.WriteString(fmt.Sprintf("GOOGLE_CREDENTIALS_FILE=\"%s/.gcal-organizer/credentials.json\"\n\n", home))
+
+	if storedInKeychain {
+		b.WriteString("# Gemini API key and OAuth credentials are stored in the OS keychain.\n")
+		b.WriteString("# Run 'gcal-organizer doctor --verbose' to verify.\n\n")
+	} else {
+		home := mustUserHomeDir()
+		b.WriteString("# Required: GCP API Key for Gemini AI\n")
+		// Single-quote the value so shell treats it as a literal string, preventing
+		// injection via $, `, or " characters in the API key. A single-quote inside
+		// the value is escaped with the POSIX '\'' sequence, which closes the
+		// current single-quoted string, inserts a literal ', then re-opens it.
+		escapedKey := strings.ReplaceAll(apiKey, "'", "'\\''")
+		b.WriteString(fmt.Sprintf("GEMINI_API_KEY='%s'\n\n", escapedKey))
+		b.WriteString("# Required: Path to Google OAuth2 credentials\n")
+		b.WriteString(fmt.Sprintf("GOOGLE_CREDENTIALS_FILE=\"%s/.gcal-organizer/credentials.json\"\n\n", home))
+	}
+
 	b.WriteString("# Optional: Master folder name in Google Drive\n")
 	b.WriteString("GCAL_MASTER_FOLDER_NAME=\"Meeting Notes\"\n\n")
 	b.WriteString("# Optional: Days to look back for calendar events\n")
