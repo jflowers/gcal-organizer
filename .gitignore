@@ -35,6 +35,8 @@ credentials.json
 token.json
 *.pem
 *.key
+*.p12
+*.p8
 
 # Build artifacts
 dist/

@@ -10,79 +10,181 @@ permissions:
 
 jobs:
   release:
-    name: Build & Release
     runs-on: ubuntu-latest
-
+    timeout-minutes: 45
+    outputs:
+      has_signing_secrets: ${{ steps.check-secrets.outputs.has_secrets }}
     steps:
+      - name: Check signing secrets
+        id: check-secrets
+        run: |
+          if [ -n "$MACOS_SIGN_P12" ]; then
+            echo "has_secrets=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_secrets=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
 
-      - name: Run tests
-        run: go test -race ./...
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29  # v7.0.0
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
-      - name: Build binaries
+  sign-macos:
+    runs-on: macos-latest
+    needs: release
+    if: ${{ needs.release.outputs.has_signing_secrets == 'true' }}
+    timeout-minutes: 30
+    steps:
+      - name: Import certificate into Keychain
         run: |
-          mkdir -p dist
-          targets="darwin/arm64 darwin/amd64 linux/amd64 linux/arm64"
-          for target in $targets; do
-            os="${target%/*}"
-            arch="${target#*/}"
-            output="dist/gcal-organizer-${os}-${arch}"
-            echo "Building ${os}/${arch}..."
-            GOOS=$os GOARCH=$arch go build -ldflags="-s -w -X main.Version=${GITHUB_REF_NAME}" -o "$output" ./cmd/gcal-organizer
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+
+          echo -n "$MACOS_SIGN_P12" | base64 --decode -o $RUNNER_TEMP/cert.p12
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security import $RUNNER_TEMP/cert.p12 -P "$MACOS_SIGN_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+        env:
+          MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
+          MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
+
+      - name: Prepare notary key
+        run: |
+          echo -n "$MACOS_NOTARY_KEY" | base64 --decode -o $RUNNER_TEMP/notary_key.p8
+        env:
+          MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+
+      - name: Download darwin archives
+        run: |
+          gh release download "${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" --pattern "gcal-organizer_*_darwin_*.tar.gz" --dir ./artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign and notarize
+        run: |
+          mkdir -p ./signed
+          for archive in ./artifacts/gcal-organizer_*_darwin_*.tar.gz; do
+            echo "==> Processing $(basename "$archive")"
+            workdir=$(mktemp -d)
+
+            # Extract binary
+            tar -xzf "$archive" -C "$workdir"
+
+            # Sign with codesign
+            codesign --force --timestamp --options runtime \
+              --sign "Developer ID Application: John Flowers (PGFWLVZX55)" \
+              "$workdir/gcal-organizer"
+
+            # Verify signature
+            codesign --verify --verbose=2 "$workdir/gcal-organizer"
+
+            # Zip for notarytool (requires .zip, not .tar.gz)
+            ditto -c -k "$workdir/gcal-organizer" "$workdir/gcal-organizer.zip"
+
+            # Submit for notarization and wait
+            xcrun notarytool submit "$workdir/gcal-organizer.zip" \
+              --key "$RUNNER_TEMP/notary_key.p8" \
+              --key-id "$MACOS_NOTARY_KEY_ID" \
+              --issuer "$MACOS_NOTARY_ISSUER_ID" \
+              --wait --timeout 20m
+
+            # Re-archive signed binary with original archive name
+            tar -czf "./signed/$(basename "$archive")" -C "$workdir" gcal-organizer
+
+            rm -rf "$workdir"
+            echo "==> Done: $(basename "$archive")"
           done
-          ls -lh dist/
+        env:
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
 
-      - name: Package man page
+      - name: Replace release assets and update checksums
         run: |
-          gzip -c man/gcal-organizer.1 > dist/gcal-organizer.1.gz
+          # Upload signed darwin archives (replaces unsigned)
+          gh release upload "${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" ./signed/*.tar.gz --clobber
 
-      - name: Generate Homebrew formula
+          # Download existing checksums
+          gh release download "${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" --pattern "checksums.txt" --dir ./
+
+          # Remove darwin lines from checksums (keep linux and other lines)
+          grep -v darwin checksums.txt > checksums_updated.txt || true
+
+          # Compute SHA256 for each signed darwin archive
+          for archive in ./signed/*.tar.gz; do
+            shasum -a 256 "$archive" | sed 's|./signed/||' >> checksums_updated.txt
+          done
+
+          # Replace checksums file
+          mv checksums_updated.txt checksums.txt
+          gh release upload "${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" checksums.txt --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Homebrew cask checksums
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          TARBALL_URL="https://github.com/${{ github.repository }}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
-          # Download the tarball to compute SHA
-          curl -sL "$TARBALL_URL" -o /tmp/source.tar.gz
-          SHA256=$(sha256sum /tmp/source.tar.gz | cut -d' ' -f1)
 
-          sed -e "s|v1.1.0|${GITHUB_REF_NAME}|g" \
-              -e "s|PLACEHOLDER_SHA256|${SHA256}|g" \
-              deploy/homebrew/gcal-organizer.rb > dist/gcal-organizer.rb
+          # Compute signed checksums
+          ARM64_SHA=$(shasum -a 256 "./signed/gcal-organizer_${VERSION}_darwin_arm64.tar.gz" | awk '{print $1}')
+          AMD64_SHA=$(shasum -a 256 "./signed/gcal-organizer_${VERSION}_darwin_amd64.tar.gz" | awk '{print $1}')
 
-          echo "Generated formula for ${GITHUB_REF_NAME} (SHA: ${SHA256})"
-          cat dist/gcal-organizer.rb
+          echo "darwin_arm64 SHA256: $ARM64_SHA"
+          echo "darwin_amd64 SHA256: $AMD64_SHA"
 
-      - name: Publish formula to Homebrew tap
-        env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-        run: |
-          # Clone the tap repo
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/jflowers/homebrew-gcal-organizer.git" /tmp/tap
+          # Clone the Homebrew tap
+          git clone "https://x-access-token:${HOMEBREW_TAP_GITHUB_TOKEN}@github.com/jflowers/homebrew-gcal-organizer.git" tap
+          cd tap
 
-          # Ensure Formula directory exists
-          mkdir -p /tmp/tap/Formula
+          CASK_FILE="Casks/gcal-organizer.rb"
+          if [ ! -f "$CASK_FILE" ]; then
+            echo "::error::Cask file not found: $CASK_FILE"
+            exit 1
+          fi
 
-          # Copy the generated formula
-          cp dist/gcal-organizer.rb /tmp/tap/Formula/gcal-organizer.rb
+          # Update darwin checksums in the cask file
+          # The cask has on_intel (amd64) then on_arm (arm64) blocks under on_macos
+          # Use awk to replace the correct sha256 values based on URL context
+          awk -v amd64="$AMD64_SHA" -v arm64="$ARM64_SHA" '
+            /darwin_amd64/ { found_amd64=1 }
+            /darwin_arm64/ { found_arm64=1 }
+            /sha256/ && found_amd64 {
+              sub(/sha256 "[^"]*"/, "sha256 \"" amd64 "\"")
+              found_amd64=0
+            }
+            /sha256/ && found_arm64 {
+              sub(/sha256 "[^"]*"/, "sha256 \"" arm64 "\"")
+              found_arm64=0
+            }
+            { print }
+          ' "$CASK_FILE" > "${CASK_FILE}.tmp"
+          mv "${CASK_FILE}.tmp" "$CASK_FILE"
 
           # Commit and push
-          cd /tmp/tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/gcal-organizer.rb
-          git commit -m "Update gcal-organizer to ${GITHUB_REF_NAME}" || echo "No changes to commit"
+          git add "$CASK_FILE"
+          git diff --cached --quiet && { echo "No checksum changes needed"; exit 0; }
+          git commit -m "Update macOS checksums for gcal-organizer v${VERSION} (post-signing)"
           git push
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          generate_release_notes: true
-          files: dist/*
-
+        env:
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

@@ -19,12 +19,12 @@
 
 **Purpose**: Configure GitHub repository secrets required for macOS code signing and notarization
 
-- [ ] T001 Set `MACOS_SIGN_P12` secret on `jflowers/gcal-organizer` via `gh secret set` using base64-encoded P12 certificate value from `/Users/jflowers/Projects/github/unbound-force/temp/env.md`
-- [ ] T002 [P] Set `MACOS_SIGN_PASSWORD` secret on `jflowers/gcal-organizer` via `gh secret set` using password value from `/Users/jflowers/Projects/github/unbound-force/temp/env.md`
-- [ ] T003 [P] Set `MACOS_NOTARY_KEY` secret on `jflowers/gcal-organizer` via `gh secret set` using base64-encoded P8 key value from `/Users/jflowers/Projects/github/unbound-force/temp/env.md`
-- [ ] T004 [P] Set `MACOS_NOTARY_KEY_ID` secret on `jflowers/gcal-organizer` via `gh secret set` with value `4K669B7BD9`
-- [ ] T005 [P] Set `MACOS_NOTARY_ISSUER_ID` secret on `jflowers/gcal-organizer` via `gh secret set` with value `f3feda93-660b-47a6-a402-7f95d678ca7c`
-- [ ] T006 Verify `HOMEBREW_TAP_GITHUB_TOKEN` secret exists on `jflowers/gcal-organizer` (rename from existing `HOMEBREW_TAP_TOKEN` if needed) via `gh secret list`
+- [x] T001 Set `MACOS_SIGN_P12` secret on `jflowers/gcal-organizer` via `gh secret set` using base64-encoded P12 certificate value from `/Users/jflowers/Projects/github/unbound-force/temp/env.md`
+- [x] T002 [P] Set `MACOS_SIGN_PASSWORD` secret on `jflowers/gcal-organizer` via `gh secret set` using password value from `/Users/jflowers/Projects/github/unbound-force/temp/env.md`
+- [x] T003 [P] Set `MACOS_NOTARY_KEY` secret on `jflowers/gcal-organizer` via `gh secret set` using base64-encoded P8 key value from `/Users/jflowers/Projects/github/unbound-force/temp/env.md`
+- [x] T004 [P] Set `MACOS_NOTARY_KEY_ID` secret on `jflowers/gcal-organizer` via `gh secret set` with value `4K669B7BD9`
+- [x] T005 [P] Set `MACOS_NOTARY_ISSUER_ID` secret on `jflowers/gcal-organizer` via `gh secret set` with value `f3feda93-660b-47a6-a402-7f95d678ca7c`
+- [x] T006 Verify `HOMEBREW_TAP_GITHUB_TOKEN` secret exists on `jflowers/gcal-organizer` (rename from existing `HOMEBREW_TAP_TOKEN` if needed) via `gh secret list`
 
 ---
 
@@ -36,18 +36,18 @@
 
 ### US5 — Standardized Release Archive Format (P3)
 
-- [ ] T007 [US5] Create `.goreleaser.yaml` at repository root with GoReleaser v2 schema: builds section targeting `./cmd/gcal-organizer` with `CGO_ENABLED=0`, `goos: [darwin, linux]`, `goarch: [amd64, arm64]`, ldflags `-X main.Version={{.Tag}}` (per data-model.md Entity: GoReleaser Configuration)
-- [ ] T008 [US5] Add archives section to `.goreleaser.yaml`: format `tar.gz`, name template `gcal-organizer_{{ .Version }}_{{ .Os }}_{{ .Arch }}`, files list including `LICENSE*` and `man/gcal-organizer.1` (FR-002, FR-014)
-- [ ] T009 [US5] Add checksum section to `.goreleaser.yaml`: name template `checksums.txt` (FR-003)
-- [ ] T010 [US5] Add changelog section to `.goreleaser.yaml`: grouped by features/fixes/docs, exclude `chore:` commits (matching Gaze reference at `/Users/jflowers/Projects/github/unbound-force/gaze/.goreleaser.yaml`)
-- [ ] T011 [US5] Add `homebrew_casks` section to `.goreleaser.yaml`: name `gcal-organizer`, directory `Casks`, repository `{owner: jflowers, name: homebrew-gcal-organizer}`, token `{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}`, binaries `[gcal-organizer]`, manpages `[man/gcal-organizer.1]`, `skip_upload: auto`, description and homepage fields (FR-012, data-model.md Entity: Homebrew Cask)
-- [ ] T012 [US5] Validate GoReleaser config locally by running `goreleaser check` and `goreleaser release --snapshot --clean`, then inspect `dist/*.tar.gz` to confirm each archive contains `gcal-organizer` binary, `man/gcal-organizer.1`, and `LICENSE`
+- [x] T007 [US5] Create `.goreleaser.yaml` at repository root with GoReleaser v2 schema: builds section targeting `./cmd/gcal-organizer` with `CGO_ENABLED=0`, `goos: [darwin, linux]`, `goarch: [amd64, arm64]`, ldflags `-X main.Version={{.Tag}}` (per data-model.md Entity: GoReleaser Configuration)
+- [x] T008 [US5] Add archives section to `.goreleaser.yaml`: format `tar.gz`, name template `gcal-organizer_{{ .Version }}_{{ .Os }}_{{ .Arch }}`, files list including `LICENSE*` and `man/gcal-organizer.1` (FR-002, FR-014)
+- [x] T009 [US5] Add checksum section to `.goreleaser.yaml`: name template `checksums.txt` (FR-003)
+- [x] T010 [US5] Add changelog section to `.goreleaser.yaml`: grouped by features/fixes/docs, exclude `chore:` commits (matching Gaze reference at `/Users/jflowers/Projects/github/unbound-force/gaze/.goreleaser.yaml`)
+- [x] T011 [US5] Add `homebrew_casks` section to `.goreleaser.yaml`: name `gcal-organizer`, directory `Casks`, repository `{owner: jflowers, name: homebrew-gcal-organizer}`, token `{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}`, binaries `[gcal-organizer]`, manpages `[man/gcal-organizer.1]`, `skip_upload: auto`, description and homepage fields (FR-012, data-model.md Entity: Homebrew Cask)
+- [x] T012 [US5] Validate GoReleaser config locally by running `goreleaser check` and `goreleaser release --snapshot --clean`, then inspect `dist/*.tar.gz` to confirm each archive contains `gcal-organizer` binary, `man/gcal-organizer.1`, and `LICENSE`
 
 ### US3 — Graceful Degradation (P2) + Release Job Core
 
-- [ ] T013 [US3] Rewrite `.github/workflows/release.yml` — replace the entire current content with a two-job pipeline. Job 1 (`release`): runs on `ubuntu-latest` with 45-minute timeout. Add `check-secrets` step that checks if `MACOS_SIGN_P12` is set and outputs `has_signing_secrets` (true/false) via `$GITHUB_OUTPUT` (FR-010, FR-011, research.md Decision 10)
-- [ ] T014 [US3] In `.github/workflows/release.yml` release job: add checkout step (actions/checkout with `fetch-depth: 0`), setup Go step (actions/setup-go with `go-version-file: go.mod`), and GoReleaser step (`goreleaser/goreleaser-action` v2 with `args: release --clean`) passing `GITHUB_TOKEN` and `HOMEBREW_TAP_GITHUB_TOKEN` env vars (FR-001, FR-004, FR-015)
-- [ ] T015 [US3] In `.github/workflows/release.yml`: add `outputs` section to `release` job declaring `has_signing_secrets: ${{ steps.check-secrets.outputs.has_secrets }}` and pin all action versions to commit SHAs matching the Gaze reference at `/Users/jflowers/Projects/github/unbound-force/gaze/.github/workflows/release.yml`
+- [x] T013 [US3] Rewrite `.github/workflows/release.yml` — replace the entire current content with a two-job pipeline. Job 1 (`release`): runs on `ubuntu-latest` with 45-minute timeout. Add `check-secrets` step that checks if `MACOS_SIGN_P12` is set and outputs `has_signing_secrets` (true/false) via `$GITHUB_OUTPUT` (FR-010, FR-011, research.md Decision 10)
+- [x] T014 [US3] In `.github/workflows/release.yml` release job: add checkout step (actions/checkout with `fetch-depth: 0`), setup Go step (actions/setup-go with `go-version-file: go.mod`), and GoReleaser step (`goreleaser/goreleaser-action` v2 with `args: release --clean`) passing `GITHUB_TOKEN` and `HOMEBREW_TAP_GITHUB_TOKEN` env vars (FR-001, FR-004, FR-015)
+- [x] T015 [US3] In `.github/workflows/release.yml`: add `outputs` section to `release` job declaring `has_signing_secrets: ${{ steps.check-secrets.outputs.has_secrets }}` and pin all action versions to commit SHAs matching the Gaze reference at `/Users/jflowers/Projects/github/unbound-force/gaze/.github/workflows/release.yml`
 
 **Checkpoint**: At this point, pushing a tag should produce a working release with unsigned tar.gz archives, checksums.txt, changelog, and Homebrew Cask. The sign-macos job doesn't exist yet so it will be skipped. US5 and US3 are independently testable.
 
@@ -61,12 +61,12 @@
 
 ### Implementation
 
-- [ ] T016 [US1] In `.github/workflows/release.yml`: add `sign-macos` job skeleton — runs on `macos-latest`, `needs: release`, conditional `if: ${{ needs.release.outputs.has_signing_secrets == 'true' }}`, 30-minute timeout (research.md Decision 3)
-- [ ] T017 [US1] In `.github/workflows/release.yml` sign-macos job: add "Import certificate into Keychain" step — decode `MACOS_SIGN_P12` base64 to `$RUNNER_TEMP/cert.p12`, create temporary keychain with random password, import cert, set partition list for `codesign` access, set as user keychain (research.md Decision 4, data-model.md Temporary Artifacts). Reference implementation at `/Users/jflowers/Projects/github/unbound-force/gaze/.github/workflows/release.yml` lines 55-69
-- [ ] T018 [US1] In `.github/workflows/release.yml` sign-macos job: add "Prepare notary key" step — decode `MACOS_NOTARY_KEY` base64 to `$RUNNER_TEMP/notary_key.p8` (research.md Decision 5, data-model.md Temporary Artifacts). Reference: Gaze release.yml lines 71-75
-- [ ] T019 [US1] In `.github/workflows/release.yml` sign-macos job: add "Download darwin archives" step — use `gh release download "${GITHUB_REF_NAME}"` with pattern `gcal-organizer_*_darwin_*.tar.gz` to `./artifacts` directory. Reference: Gaze release.yml lines 77-81
-- [ ] T020 [US1] In `.github/workflows/release.yml` sign-macos job: add "Sign and notarize" step — loop over each `./artifacts/gcal-organizer_*_darwin_*.tar.gz`: extract to temp dir, run `codesign --force --timestamp --options runtime --sign "Developer ID Application: John Flowers (PGFWLVZX55)"`, verify with `codesign --verify --verbose=2`, create zip via `ditto -c -k`, submit to `xcrun notarytool submit --wait --timeout 20m` with key/key-id/issuer args, re-archive signed binary to `./signed/` (FR-005, FR-006, FR-007, research.md Decision 9). Reference: Gaze release.yml lines 83-116
-- [ ] T021 [US2] In `.github/workflows/release.yml` sign-macos job: add "Replace release assets and update checksums" step — upload signed archives with `gh release upload --clobber`, download existing `checksums.txt`, strip darwin lines with `grep -v darwin`, recompute SHA256 for each signed archive with `shasum -a 256`, re-upload checksums (FR-008, FR-009, research.md Decision 7). Reference: Gaze release.yml lines 121-141
+- [x] T016 [US1] In `.github/workflows/release.yml`: add `sign-macos` job skeleton — runs on `macos-latest`, `needs: release`, conditional `if: ${{ needs.release.outputs.has_signing_secrets == 'true' }}`, 30-minute timeout (research.md Decision 3)
+- [x] T017 [US1] In `.github/workflows/release.yml` sign-macos job: add "Import certificate into Keychain" step — decode `MACOS_SIGN_P12` base64 to `$RUNNER_TEMP/cert.p12`, create temporary keychain with random password, import cert, set partition list for `codesign` access, set as user keychain (research.md Decision 4, data-model.md Temporary Artifacts). Reference implementation at `/Users/jflowers/Projects/github/unbound-force/gaze/.github/workflows/release.yml` lines 55-69
+- [x] T018 [US1] In `.github/workflows/release.yml` sign-macos job: add "Prepare notary key" step — decode `MACOS_NOTARY_KEY` base64 to `$RUNNER_TEMP/notary_key.p8` (research.md Decision 5, data-model.md Temporary Artifacts). Reference: Gaze release.yml lines 71-75
+- [x] T019 [US1] In `.github/workflows/release.yml` sign-macos job: add "Download darwin archives" step — use `gh release download "${GITHUB_REF_NAME}"` with pattern `gcal-organizer_*_darwin_*.tar.gz` to `./artifacts` directory. Reference: Gaze release.yml lines 77-81
+- [x] T020 [US1] In `.github/workflows/release.yml` sign-macos job: add "Sign and notarize" step — loop over each `./artifacts/gcal-organizer_*_darwin_*.tar.gz`: extract to temp dir, run `codesign --force --timestamp --options runtime --sign "Developer ID Application: John Flowers (PGFWLVZX55)"`, verify with `codesign --verify --verbose=2`, create zip via `ditto -c -k`, submit to `xcrun notarytool submit --wait --timeout 20m` with key/key-id/issuer args, re-archive signed binary to `./signed/` (FR-005, FR-006, FR-007, research.md Decision 9). Reference: Gaze release.yml lines 83-116
+- [x] T021 [US2] In `.github/workflows/release.yml` sign-macos job: add "Replace release assets and update checksums" step — upload signed archives with `gh release upload --clobber`, download existing `checksums.txt`, strip darwin lines with `grep -v darwin`, recompute SHA256 for each signed archive with `shasum -a 256`, re-upload checksums (FR-008, FR-009, research.md Decision 7). Reference: Gaze release.yml lines 121-141
 
 **Checkpoint**: At this point, pushing a tag should produce a release with signed macOS binaries and accurate checksums. US1 and US2 are independently verifiable per quickstart.md Steps 4-5.
 
@@ -80,7 +80,7 @@
 
 ### Implementation
 
-- [ ] T022 [US4] In `.github/workflows/release.yml` sign-macos job: add "Update Homebrew cask checksums" step — compute signed checksums for `darwin_arm64` and `darwin_amd64` archives, clone `jflowers/homebrew-gcal-organizer` tap repo using `HOMEBREW_TAP_GITHUB_TOKEN`, locate `Casks/gcal-organizer.rb`, use `awk` to replace darwin `sha256` values based on URL context (`darwin_amd64` / `darwin_arm64`), commit and push with message `"Update macOS checksums for gcal-organizer v${VERSION} (post-signing)"` (FR-013, data-model.md Entity: Homebrew Cask lifecycle). Reference: Gaze release.yml lines 143-190
+- [x] T022 [US4] In `.github/workflows/release.yml` sign-macos job: add "Update Homebrew cask checksums" step — compute signed checksums for `darwin_arm64` and `darwin_amd64` archives, clone `jflowers/homebrew-gcal-organizer` tap repo using `HOMEBREW_TAP_GITHUB_TOKEN`, locate `Casks/gcal-organizer.rb`, use `awk` to replace darwin `sha256` values based on URL context (`darwin_amd64` / `darwin_arm64`), commit and push with message `"Update macOS checksums for gcal-organizer v${VERSION} (post-signing)"` (FR-013, data-model.md Entity: Homebrew Cask lifecycle). Reference: Gaze release.yml lines 143-190
 
 **Checkpoint**: The full two-job pipeline is now complete. All signing, checksum, and Cask update steps are in place.
 
@@ -90,12 +90,12 @@
 
 **Purpose**: Remove superseded files from the Formula-based distribution model and update documentation.
 
-- [ ] T023 Remove `.github/workflows/bottles.yml` — superseded by Cask-based distribution (FR-017)
-- [ ] T024 [P] Remove `deploy/homebrew/gcal-organizer.rb` — superseded by GoReleaser Cask generation (FR-017)
-- [ ] T025 [P] Update `README.md` — replace Homebrew installation instructions: change from `brew install jflowers/gcal-organizer/gcal-organizer` (Formula) to `brew install --cask jflowers/gcal-organizer/gcal-organizer` (Cask). Add note about signed macOS binaries and Gatekeeper compatibility.
-- [ ] T026 Run `goreleaser check` to validate final `.goreleaser.yaml` config
-- [ ] T027 Run `make ci` to confirm no Go build/test/vet/fmt regressions from pipeline changes
-- [ ] T028 Run quickstart.md validation: push a test tag, verify both pipeline jobs complete, verify codesign/notarization/checksums/Cask per quickstart.md Steps 3-7
+- [x] T023 Remove `.github/workflows/bottles.yml` — superseded by Cask-based distribution (FR-017)
+- [x] T024 [P] Remove `deploy/homebrew/gcal-organizer.rb` — superseded by GoReleaser Cask generation (FR-017)
+- [x] T025 [P] Update `README.md` — replace Homebrew installation instructions: change from `brew install jflowers/gcal-organizer/gcal-organizer` (Formula) to `brew install --cask jflowers/gcal-organizer/gcal-organizer` (Cask). Add note about signed macOS binaries and Gatekeeper compatibility.
+- [x] T026 Run `goreleaser check` to validate final `.goreleaser.yaml` config
+- [x] T027 Run `make ci` to confirm no Go build/test/vet/fmt regressions from pipeline changes
+- [ ] T028 Run quickstart.md validation: push a test tag, verify both pipeline jobs complete, verify codesign/notarization/checksums/Cask per quickstart.md Steps 3-7 *(deferred to post-merge — requires tag push on main)*
 
 ---
 

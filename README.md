@@ -66,9 +66,9 @@ Google Drive
 ### Install via Homebrew (macOS & Linux)
 
 ```bash
-# Tap and install (includes Node.js dependency + man page)
+# Tap and install the pre-built signed binary
 brew tap jflowers/gcal-organizer
-brew install gcal-organizer
+brew install --cask gcal-organizer
 
 # Authenticate with Google
 gcal-organizer auth login
@@ -80,6 +80,8 @@ gcal-organizer install
 # Test with dry-run first
 gcal-organizer run --dry-run --verbose
 ```
+
+> **macOS note**: Release binaries are code-signed and notarized by Apple. Gatekeeper will not block execution or display "unidentified developer" warnings.
 
 ### Install from Source
 
