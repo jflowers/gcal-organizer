@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+builds:
+  - main: ./cmd/gcal-organizer
+    binary: gcal-organizer
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.Version={{.Tag}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      gcal-organizer_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE*
+      - man/gcal-organizer.1
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Documentation
+      regexp: '^.*?docs(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Others
+      order: 999
+  filters:
+    exclude:
+      - '^chore:'
+
+homebrew_casks:
+  - name: gcal-organizer
+    directory: Casks
+    repository:
+      owner: jflowers
+      name: homebrew-gcal-organizer
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/jflowers/gcal-organizer
+    description: >-
+      Automate meeting note organization, calendar syncing, and task assignment
+    binaries:
+      - gcal-organizer
+    skip_upload: auto
+    commit_msg_template: >-
+      Brew cask update for {{ .ProjectName }} version {{ .Tag }}
