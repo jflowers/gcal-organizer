@@ -2,6 +2,7 @@
 
 **Purpose**: Validate specification completeness and quality before proceeding to planning  
 **Created**: 2026-03-08  
+**Updated**: 2026-03-08 (post-clarification)  
 **Feature**: [spec.md](../spec.md)
 
 ## Content Quality
@@ -31,6 +32,8 @@
 
 ## Notes
 
-- All items passed on the first validation iteration.
-- The spec covers 5 user stories across 3 priority levels (P1-P3), 15 functional requirements, 4 key entities, 6 success criteria, 5 edge cases, and 6 assumptions.
-- No clarification questions were needed; reasonable defaults and assumptions were applied throughout based on the proven Gaze reference implementation and standard Apple code signing practices.
+- All items passed on the first validation iteration (pre-clarification) and remain passing post-clarification.
+- One clarification question was asked and resolved: Homebrew distribution model switched from source-based Formula to binary-download Cask (matching the Gaze project pattern).
+- The spec now covers 5 user stories across 3 priority levels (P1-P3), 17 functional requirements, 4 key entities, 6 success criteria, 5 edge cases, and 6 assumptions.
+- FR-012 was refined to specify Cask publication; FR-013 added for Cask checksum updates post-signing; FR-017 added for Formula/bottles removal.
+- User Story 4 updated from "Formula Integrity" to "Cask Integrity" with revised acceptance scenarios.
