@@ -5,6 +5,12 @@
 **Status**: Draft  
 **Input**: User description: "Publish signed macOS binaries in the release pipeline"
 
+## Clarifications
+
+### Session 2026-03-08
+
+- Q: Should Homebrew distribution use the current source-based Formula or switch to a binary-download Cask (matching the Gaze project pattern)? → A: Switch to a Homebrew Cask (binary-download) matching the Gaze project. The build tool generates the initial Cask with unsigned binary checksums, the signing pipeline updates the Cask's macOS checksums to match signed archives, and the existing source-based Formula and `bottles.yml` workflow are replaced.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Trusted macOS Binary Installation (Priority: P1)
@@ -54,18 +60,19 @@ As a fork maintainer or contributor, I want the release pipeline to publish unsi
 
 ---
 
-### User Story 4 - Homebrew Formula Integrity After Signing (Priority: P2)
+### User Story 4 - Homebrew Cask Integrity After Signing (Priority: P2)
 
-As a Homebrew user, I want the Homebrew formula in the tap repository to reflect correct checksums for signed macOS binaries so that `brew install` and `brew audit` succeed without hash mismatches.
+As a Homebrew user, I want the Homebrew Cask in the tap repository to reflect correct checksums for signed macOS binary archives so that `brew install --cask` succeeds without hash mismatches.
 
-**Why this priority**: Homebrew is a primary distribution channel. If the formula checksums don't match the actual release artifacts, installation fails for all Homebrew users.
+**Why this priority**: Homebrew is a primary distribution channel. If the Cask checksums don't match the actual signed binary archives on the GitHub Release, installation fails for all Homebrew users.
 
-**Independent Test**: Can be tested by running `brew install jflowers/gcal-organizer/gcal-organizer` after a signed release and verifying it completes without checksum errors.
+**Independent Test**: Can be tested by running `brew install --cask jflowers/gcal-organizer/gcal-organizer` after a signed release and verifying it completes without checksum errors.
 
 **Acceptance Scenarios**:
 
-1. **Given** macOS binaries have been signed and published, **When** the pipeline updates the Homebrew tap, **Then** the formula's SHA256 values match the signed release artifacts.
-2. **Given** a signed release has been published and the formula updated, **When** a user runs `brew install`, **Then** installation succeeds without checksum verification failures.
+1. **Given** macOS binaries have been signed and published, **When** the pipeline updates the Homebrew tap, **Then** the Cask's SHA256 values for macOS archives match the signed binary archives.
+2. **Given** a signed release has been published and the Cask updated, **When** a user runs `brew install --cask`, **Then** installation succeeds without checksum verification failures.
+3. **Given** a signed release has been published, **When** the Cask is inspected in the tap repository, **Then** it downloads pre-built binary archives (not source) for each supported platform/architecture.
 
 ---
 
@@ -90,7 +97,7 @@ As a user downloading gcal-organizer, I want release binaries to be packaged as 
 - What happens when the signing certificate expires? The signing step should fail with a clear error message indicating the certificate issue, while the unsigned release remains available.
 - What happens when only some signing secrets are configured (partial configuration)? The pipeline should treat this the same as no secrets configured and skip signing entirely rather than failing mid-process.
 - What happens when a release is re-tagged or re-run? The pipeline should overwrite existing release assets with freshly signed binaries and update checksums accordingly.
-- What happens when the Homebrew tap repository is temporarily unreachable? The signing and asset replacement should still succeed; the Homebrew update step should fail independently without rolling back signed assets.
+- What happens when the Homebrew tap repository is temporarily unreachable? The signing and asset replacement should still succeed; the Homebrew Cask update step should fail independently without rolling back signed assets.
 
 ## Requirements *(mandatory)*
 
@@ -107,17 +114,19 @@ As a user downloading gcal-organizer, I want release binaries to be packaged as 
 - **FR-009**: The release pipeline MUST recompute and update the checksums file after replacing unsigned macOS archives with signed ones, preserving non-macOS checksums.
 - **FR-010**: The release pipeline MUST skip the signing step entirely (without error) when signing credentials are not configured.
 - **FR-011**: The release pipeline MUST detect credential availability before attempting to sign, using a check that outputs the result for conditional job execution.
-- **FR-012**: The release pipeline MUST update the Homebrew formula in the tap repository with correct SHA256 checksums after signing is complete.
-- **FR-013**: The release pipeline MUST include the man page (`gcal-organizer.1`) in each release archive alongside the binary.
-- **FR-014**: The release pipeline MUST inject the release version into the binary at build time so that `gcal-organizer --version` reports the correct tag.
-- **FR-015**: Signing credentials MUST be stored as repository secrets, never committed to the codebase or logged in pipeline output.
+- **FR-012**: The release pipeline MUST publish a Homebrew Cask to the tap repository that downloads pre-built binary archives for each supported platform/architecture.
+- **FR-013**: The signing pipeline MUST update the Homebrew Cask's macOS SHA256 checksums in the tap repository to match the signed binary archives after signing is complete.
+- **FR-014**: The release pipeline MUST include the man page (`gcal-organizer.1`) in each release archive alongside the binary.
+- **FR-015**: The release pipeline MUST inject the release version into the binary at build time so that `gcal-organizer --version` reports the correct tag.
+- **FR-016**: Signing credentials MUST be stored as repository secrets, never committed to the codebase or logged in pipeline output.
+- **FR-017**: The existing source-based Homebrew Formula and `bottles.yml` workflow MUST be removed as part of the migration to the Cask-based distribution model.
 
 ### Key Entities
 
 - **Release Archive**: A tar.gz file containing the built binary and man page for a specific platform/architecture combination. Named `gcal-organizer_<version>_<os>_<arch>.tar.gz`. Exists in two lifecycle states: unsigned (initial publish) and signed (post-signing replacement, macOS only).
 - **Checksums File**: A text file (`checksums.txt`) containing SHA256 hashes for all release archives. Updated after signing to reflect signed macOS archives while preserving Linux hashes.
 - **Signing Credential Set**: The collection of five secrets required for macOS code signing and notarization: the Developer ID certificate (P12), its password, the App Store Connect API key (P8), the API key ID, and the issuer ID.
-- **Homebrew Formula**: The Ruby file in the tap repository that defines how Homebrew installs gcal-organizer, including SHA256 checksums for source or binary verification.
+- **Homebrew Cask**: The Ruby file in the tap repository (`Casks/gcal-organizer.rb`) that defines how Homebrew installs gcal-organizer by downloading pre-built binary archives. Contains per-platform SHA256 checksums that are updated after signing to match the signed macOS archives.
 
 ## Success Criteria *(mandatory)*
 
@@ -127,7 +136,7 @@ As a user downloading gcal-organizer, I want release binaries to be packaged as 
 - **SC-002**: 100% of checksums in the published `checksums.txt` match the actual release archive contents (both macOS and Linux).
 - **SC-003**: The signing and notarization process completes within 30 minutes of the initial release build finishing.
 - **SC-004**: The release pipeline succeeds without errors in repositories where signing credentials are not configured (graceful degradation).
-- **SC-005**: `brew install` from the tap succeeds without checksum mismatches after a signed release.
+- **SC-005**: `brew install --cask` from the tap succeeds without checksum mismatches after a signed release.
 - **SC-006**: The release pipeline produces archives for all 4 target platforms (darwin/arm64, darwin/amd64, linux/arm64, linux/amd64) on every release.
 
 ## Assumptions
@@ -135,6 +144,6 @@ As a user downloading gcal-organizer, I want release binaries to be packaged as 
 - The Apple Developer ID Application certificate is valid and not expired at the time of release.
 - The App Store Connect API key has sufficient permissions for notarization submissions.
 - The signing identity (`Developer ID Application: John Flowers (PGFWLVZX55)`) is the same identity used across all projects by this developer.
-- The Homebrew tap repository (`jflowers/homebrew-gcal-organizer`) uses a Formula (source-based build), not a Cask (binary-based install). The formula checksum update applies to the source tarball SHA256, and signed binary checksums are maintained in the GitHub Release `checksums.txt`.
+- The Homebrew tap repository (`jflowers/homebrew-gcal-organizer`) will migrate from a source-based Formula (under `Formula/`) to a binary-download Cask (under `Casks/`), matching the pattern used by the Gaze project's `unbound-force/homebrew-tap`.
 - macOS CLI binaries (bare Mach-O executables) cannot be stapled; notarization approval is verified online by Gatekeeper via Apple's servers.
-- An existing `bottles.yml` workflow handles Homebrew bottle builds separately and is unaffected by this feature.
+- The existing `bottles.yml` workflow and source-based Formula (`deploy/homebrew/gcal-organizer.rb`) are superseded by the Cask-based distribution and will be removed.
