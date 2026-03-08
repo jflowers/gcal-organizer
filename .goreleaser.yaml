@@ -59,6 +59,8 @@ homebrew_casks:
       Automate meeting note organization, calendar syncing, and task assignment
     binaries:
       - gcal-organizer
+    manpages:
+      - man/gcal-organizer.1
     skip_upload: auto
     commit_msg_template: >-
       Brew cask update for {{ .ProjectName }} version {{ .Tag }}
