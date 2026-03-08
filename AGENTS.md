@@ -13,6 +13,8 @@ Auto-generated from all feature plans. Last updated: 2026-02-17
 - N/A (no new data persistence; this feature only adds tests) (009-test-coverage-quality)
 - Go 1.24.0 (toolchain go1.24.12), module `github.com/jflowers/gcal-organizer` + `google.golang.org/api` (Drive v3, Docs v1, Calendar v3), `google.golang.org/genai` (Gemini), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/zalando/go-keyring` (secrets) (009-test-coverage-quality)
 - N/A (no new data persistence; this feature only adds tests and configuration) (009-test-coverage-quality)
+- Go 1.24.0 (toolchain go1.24.12) + GoReleaser v2 (CI only — `goreleaser/goreleaser-action`), `gh` CLI (release asset management), native macOS `codesign` + `xcrun notarytool` (signing/notarization) (010-macos-signed-releases)
+- N/A (no data persistence; pipeline configuration files only) (010-macos-signed-releases)
 
 - **Language**: Go 1.21+
 - **CLI Framework**: github.com/spf13/cobra
@@ -75,9 +77,9 @@ make install-hooks
 - New features require documentation before completion
 
 ## Recent Changes
+- 010-macos-signed-releases: Added Go 1.24.0 (toolchain go1.24.12) + GoReleaser v2 (CI only — `goreleaser/goreleaser-action`), `gh` CLI (release asset management), native macOS `codesign` + `xcrun notarytool` (signing/notarization)
 - 009-test-coverage-quality: Added Go 1.24.0 (toolchain go1.24.12), module `github.com/jflowers/gcal-organizer` + `google.golang.org/api` (Drive v3, Docs v1, Calendar v3), `google.golang.org/genai` (Gemini), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/zalando/go-keyring` (secrets)
 - 009-test-coverage-quality: Added Go 1.24+ (module `github.com/jflowers/gcal-organizer`, toolchain go1.24.12) + `google.golang.org/api/docs/v1`, `google.golang.org/api/drive/v3`, `google.golang.org/api/calendar/v3`, `google.golang.org/genai` (Gemini SDK), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/zalando/go-keyring` (secrets)
-- 008-decision-extraction: Added Go 1.24+ (module `github.com/jflowers/gcal-organizer`) + `google.golang.org/api/docs/v1` (Docs API — tab creation, content insertion, heading links), `google.golang.org/genai` (Gemini SDK — transcript analysis), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config)
 
 ### 001-gcal-organizer-cli
 Core CLI implementation with Google Workspace integration and Gemini AI for action item extraction.
