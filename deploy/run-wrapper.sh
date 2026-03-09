@@ -48,6 +48,7 @@ fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') — Starting gcal-organizer run"
 echo "$BINARY run"
-"$BINARY" run
-echo "Exit code: $?"
+"$BINARY" run && RC=$? || RC=$?
+echo "Exit code: $RC"
 echo "$(date '+%Y-%m-%d %H:%M:%S') — Completed gcal-organizer run"
+exit $RC

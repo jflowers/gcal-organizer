@@ -335,25 +335,39 @@ func runBrowserScript(ctx context.Context, cfg *config.Config, docID string, ass
 	return nil
 }
 
-// findBrowserDir locates the browser/ automation directory relative to the
-// executable or the current working directory (for `go run`).
+// findBrowserDir locates the browser/ automation directory. It checks, in order:
+//  1. ~/.gcal-organizer/browser/ (installed copy — works from service and CLI)
+//  2. <binary_dir>/../browser   (adjacent to binary in development layouts)
+//  3. <cwd>/browser             (running via `go run` from project root)
 func findBrowserDir() (string, error) {
-	execPath, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("failed to find executable path: %w", err)
-	}
-	browserDir := filepath.Join(filepath.Dir(execPath), "..", "browser")
-	if _, err := os.Stat(browserDir); os.IsNotExist(err) {
-		cwd, cwdErr := os.Getwd()
-		if cwdErr != nil {
-			return "", fmt.Errorf("failed to determine working directory: %w", cwdErr)
+	// 1. Installed location under config directory.
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
+		installed := filepath.Join(home, ".gcal-organizer", "browser")
+		if _, err := os.Stat(installed); err == nil {
+			return installed, nil
 		}
-		browserDir = filepath.Join(cwd, "browser")
 	}
-	if _, err := os.Stat(browserDir); os.IsNotExist(err) {
-		return "", fmt.Errorf("browser directory not found\n\nRun 'gcal-organizer setup-browser' to configure browser automation\nRun 'gcal-organizer doctor' for full diagnostics")
+
+	// 2. Relative to the executable (e.g. ../browser next to the binary).
+	execPath, err := os.Executable()
+	if err == nil {
+		adjacent := filepath.Join(filepath.Dir(execPath), "..", "browser")
+		if _, err := os.Stat(adjacent); err == nil {
+			return adjacent, nil
+		}
 	}
-	return browserDir, nil
+
+	// 3. Relative to current working directory (go run / dev workflow).
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
+		local := filepath.Join(cwd, "browser")
+		if _, err := os.Stat(local); err == nil {
+			return local, nil
+		}
+	}
+
+	return "", fmt.Errorf("browser directory not found\n\nRun 'gcal-organizer install' to copy browser automation scripts\nRun 'gcal-organizer doctor' for full diagnostics")
 }
 
 // runAssignTasksForDoc scans a document for unassigned checkboxes and runs

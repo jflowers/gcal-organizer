@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -566,6 +568,80 @@ func chromeProfilePath() (string, error) {
 	return filepath.Join(home, ".gcal-organizer", "chrome-data"), nil
 }
 
+// copyBrowserDir copies the browser/ automation directory (TypeScript scripts,
+// package.json, etc.) from the source tree to ~/.gcal-organizer/browser/.
+// node_modules/ is excluded — npm install is run in the destination afterwards.
+// The source directory is located via findBrowserDir() which checks adjacent to
+// the executable and the current working directory.
+func copyBrowserDir(home string) error {
+	destDir := filepath.Join(home, ".gcal-organizer", "browser")
+
+	// Locate the source browser/ directory. Since we haven't installed it
+	// to ~/.gcal-organizer/browser/ yet, findBrowserDir will fall through
+	// to the executable-adjacent or CWD-relative paths.
+	srcDir, err := findBrowserDir()
+	if err != nil {
+		return fmt.Errorf("cannot locate browser/ directory in source tree: %w", err)
+	}
+
+	// Remove old install so we get a clean copy.
+	if err := os.RemoveAll(destDir); err != nil {
+		return fmt.Errorf("failed to remove old browser directory: %w", err)
+	}
+
+	// Walk and copy, skipping node_modules (will be reinstalled).
+	err = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, _ := filepath.Rel(srcDir, path)
+		// Skip node_modules entirely — it will be npm-installed at dest.
+		if d.IsDir() && d.Name() == "node_modules" {
+			return filepath.SkipDir
+		}
+		dest := filepath.Join(destDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dest, 0755)
+		}
+		return copyFile(path, dest)
+	})
+	if err != nil {
+		return fmt.Errorf("failed to copy browser directory: %w", err)
+	}
+
+	// Run npm install in the destination.
+	npmCmd := exec.Command("npm", "install", "--production")
+	npmCmd.Dir = destDir
+	if out, err := npmCmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("npm install failed in %s: %w\n%s", destDir, err, string(out))
+	}
+
+	return nil
+}
+
+// copyFile copies a single file preserving permissions.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	_, err = io.Copy(out, in)
+	return err
+}
+
 // loadEnvValue reads a single value from a .env file, applying the same
 // quote-stripping and POSIX single-quote unescaping as loadDotEnv, so callers
 // always receive the actual string value rather than the shell-quoted form.
@@ -671,6 +747,16 @@ func installMacOS(home, binaryPath string) error {
 	}
 	fmt.Println("  ✅ Created wrapper script")
 
+	// Copy browser automation scripts
+	if err := copyBrowserDir(home); err != nil {
+		// Non-fatal: browser automation is optional (only needed for task assignment).
+		fmt.Printf("  ⚠️  Browser automation not installed: %v\n", err)
+		fmt.Println("     Task assignment via browser will not work in service mode.")
+		fmt.Println("     Run 'gcal-organizer install' from the project directory to fix.")
+	} else {
+		fmt.Println("  ✅ Installed browser automation scripts")
+	}
+
 	// Create plist
 	if err := os.MkdirAll(filepath.Dir(plistDest), 0755); err != nil {
 		return fmt.Errorf("failed to create LaunchAgents directory: %w", err)
@@ -746,6 +832,15 @@ func installLinux(home, binaryPath string) error {
 		return fmt.Errorf("failed to write wrapper script: %w", err)
 	}
 	fmt.Println("  ✅ Created wrapper script")
+
+	// Copy browser automation scripts
+	if err := copyBrowserDir(home); err != nil {
+		fmt.Printf("  ⚠️  Browser automation not installed: %v\n", err)
+		fmt.Println("     Task assignment via browser will not work in service mode.")
+		fmt.Println("     Run 'gcal-organizer install' from the project directory to fix.")
+	} else {
+		fmt.Println("  ✅ Installed browser automation scripts")
+	}
 
 	// Create systemd directory
 	if err := os.MkdirAll(systemdDir, 0755); err != nil {
@@ -861,9 +956,12 @@ if [ -f "$LOG_FILE" ]; then
 fi
 
 echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') — Starting gcal-organizer run"
-%s run
+echo "%s run"
+%s run && RC=$? || RC=$?
+echo "Exit code: $RC"
 echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') — Completed gcal-organizer run"
-`, quotedBin)
+exit $RC
+`, quotedBin, quotedBin)
 }
 
 func generatePlist(wrapperPath, logPath, home, binaryPath string) string {
