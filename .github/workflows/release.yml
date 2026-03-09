@@ -108,8 +108,9 @@ jobs:
               --issuer "$MACOS_NOTARY_ISSUER_ID" \
               --wait --timeout 20m
 
-            # Re-archive signed binary with original archive name
-            tar -czf "./signed/$(basename "$archive")" -C "$workdir" gcal-organizer
+            # Re-archive all contents (signed binary + man page + LICENSE) with original archive name
+            # Use the same file list as the original archive to preserve structure
+            tar -czf "./signed/$(basename "$archive")" -C "$workdir" gcal-organizer LICENSE man
 
             rm -rf "$workdir"
             echo "==> Done: $(basename "$archive")"
