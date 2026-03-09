@@ -1,4 +1,4 @@
-.PHONY: build test run clean install lint fmt vet install-service uninstall-service service-status service-logs service-trigger ci install-hooks
+.PHONY: build test run clean install lint fmt vet service-status service-logs service-trigger ci install-hooks
 
 # Binary name
 BINARY_NAME=gcal-organizer
@@ -16,14 +16,9 @@ GOFMT=gofmt
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X main.Version=$(VERSION)
 
-# Deploy paths
-DEPLOY_DIR=$(CURDIR)/deploy
-WRAPPER_SRC=$(DEPLOY_DIR)/run-wrapper.sh
-PLIST_SRC=$(DEPLOY_DIR)/launchd/com.jflowers.gcal-organizer.plist
+# Service paths (used by convenience targets only)
 PLIST_DEST=$(HOME)/Library/LaunchAgents/com.jflowers.gcal-organizer.plist
 LOG_DIR=$(HOME)/Library/Logs
-SYSTEMD_DIR=$(HOME)/.config/systemd/user
-WRAPPER_DEST=$(HOME)/.local/bin/gcal-organizer-wrapper.sh
 
 # Build the binary
 build:
@@ -120,58 +115,11 @@ install-hooks:
 dev: build
 	./$(BINARY_NAME) $(ARGS)
 
-# ─── Service Management ───────────────────────────────────────
-
-# Install as an hourly service (auto-detects macOS vs Linux)
-install-service: install
-ifeq ($(shell uname),Darwin)
-	@echo "🍎 Installing macOS LaunchAgent..."
-	@mkdir -p $(LOG_DIR)
-	@sed -e 's|WRAPPER_PATH_PLACEHOLDER|$(WRAPPER_DEST)|g' \
-	     -e 's|LOG_PATH_PLACEHOLDER|$(LOG_DIR)/gcal-organizer.log|g' \
-	     -e 's|HOME_PATH_PLACEHOLDER|$(HOME)|g' \
-	     -e "s|BINARY_PATH_PLACEHOLDER|$$(go env GOPATH)/bin/gcal-organizer|g" \
-	     $(PLIST_SRC) > $(PLIST_DEST)
-	@mkdir -p $(HOME)/.local/bin
-	@cp $(WRAPPER_SRC) $(WRAPPER_DEST)
-	@chmod +x $(WRAPPER_DEST)
-	@launchctl bootout gui/$$(id -u) $(PLIST_DEST) 2>/dev/null || true
-	@launchctl bootstrap gui/$$(id -u) $(PLIST_DEST)
-	@echo "✅ Installed! Will run every hour."
-	@echo "   Logs: $(LOG_DIR)/gcal-organizer.log"
-	@echo "   Trigger now: make service-trigger"
-else
-	@echo "🐧 Installing systemd user service..."
-	@mkdir -p $(SYSTEMD_DIR)
-	@mkdir -p $(HOME)/.local/bin
-	@cp $(WRAPPER_SRC) $(WRAPPER_DEST)
-	@chmod +x $(WRAPPER_DEST)
-	@cp $(DEPLOY_DIR)/systemd/gcal-organizer.service $(SYSTEMD_DIR)/
-	@cp $(DEPLOY_DIR)/systemd/gcal-organizer.timer $(SYSTEMD_DIR)/
-	@systemctl --user daemon-reload
-	@systemctl --user enable --now gcal-organizer.timer
-	@echo "✅ Installed! Timer active."
-	@echo "   Logs: journalctl --user -u gcal-organizer.service"
-	@echo "   Trigger now: make service-trigger"
-endif
-
-# Uninstall the service
-uninstall-service:
-ifeq ($(shell uname),Darwin)
-	@echo "🍎 Removing macOS LaunchAgent..."
-	@launchctl bootout gui/$$(id -u) $(PLIST_DEST) 2>/dev/null || true
-	@rm -f $(PLIST_DEST)
-	@rm -f $(WRAPPER_DEST)
-	@echo "✅ Service removed."
-else
-	@echo "🐧 Removing systemd user service..."
-	@systemctl --user disable --now gcal-organizer.timer 2>/dev/null || true
-	@rm -f $(SYSTEMD_DIR)/gcal-organizer.service
-	@rm -f $(SYSTEMD_DIR)/gcal-organizer.timer
-	@rm -f $(WRAPPER_DEST)
-	@systemctl --user daemon-reload
-	@echo "✅ Service removed."
-endif
+# ─── Service Convenience Shortcuts ────────────────────────────
+# Service install/uninstall is handled by:
+#   gcal-organizer install
+#   gcal-organizer uninstall
+# These targets are quick shortcuts for status, logs, and triggering.
 
 # Show service status
 service-status:
@@ -219,9 +167,7 @@ help:
 	@echo "  check             - Run fmt, vet, and test"
 	@echo "  dev               - Build and run"
 	@echo ""
-	@echo "Service management:"
-	@echo "  install-service   - Install as hourly service (macOS/Fedora)"
-	@echo "  uninstall-service - Remove the service"
+	@echo "Service management (install/uninstall via 'gcal-organizer install/uninstall'):"
 	@echo "  service-status    - Show service state"
 	@echo "  service-logs      - Show recent logs"
 	@echo "  service-trigger   - Trigger an immediate run"

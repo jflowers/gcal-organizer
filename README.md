@@ -259,7 +259,6 @@ gcal-organizer/
 │   ├── gemini/                # Gemini AI assignee + decision extraction
 │   └── organizer/             # Workflow orchestration
 ├── browser/                   # Playwright task assignment script (TypeScript)
-├── deploy/                    # Service files (launchd, systemd)
 ├── .specify/                  # Spec-kit artifacts
 ├── .github/workflows/         # CI/CD (build/test + release)
 ├── man/                       # Man page (roff)
