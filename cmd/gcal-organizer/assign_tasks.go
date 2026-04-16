@@ -30,7 +30,7 @@ var assignTasksCmd = &cobra.Command{
 
 This command:
 1. Opens the document in a browser using your Chrome profile
-2. Finds checkboxes in the "Suggested next steps" section
+2. Finds checkboxes in the "Next steps" (or "Suggested next steps") section
 3. Uses Gemini AI to identify assignees
 4. Clicks each checkbox and assigns via the native UI
 

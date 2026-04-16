@@ -20,7 +20,7 @@ func TestExtractItemsFromSection_SuggestedNextSteps(t *testing.T) {
 				Elements: []*docs.ParagraphElement{
 					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
 				},
-				ParagraphStyle: &docs.ParagraphStyle{},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
 			},
 		},
 		{
@@ -105,7 +105,7 @@ func TestExtractItemsFromSection_ProcessedEmoji(t *testing.T) {
 				Elements: []*docs.ParagraphElement{
 					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
 				},
-				ParagraphStyle: &docs.ParagraphStyle{},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
 			},
 		},
 		{
@@ -156,7 +156,7 @@ func TestExtractItemsFromSection_EmptyBullet(t *testing.T) {
 				Elements: []*docs.ParagraphElement{
 					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
 				},
-				ParagraphStyle: &docs.ParagraphStyle{},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
 			},
 		},
 		{
@@ -192,7 +192,7 @@ func TestExtractItemsFromSection_NilParagraph(t *testing.T) {
 				Elements: []*docs.ParagraphElement{
 					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
 				},
-				ParagraphStyle: &docs.ParagraphStyle{},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
 			},
 		},
 		{
@@ -216,6 +216,421 @@ func TestExtractItemsFromSection_NilParagraph(t *testing.T) {
 	// Contract: nil paragraphs are skipped without error
 	if len(items) != 1 {
 		t.Errorf("expected 1 item, got %d", len(items))
+	}
+}
+
+// ---------- isHeadingParagraph tests ----------
+
+func TestIsHeadingParagraph(t *testing.T) {
+	tests := []struct {
+		name string
+		para *docs.Paragraph
+		want bool
+	}{
+		{"HEADING_1", &docs.Paragraph{ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_1"}}, true},
+		{"HEADING_6", &docs.Paragraph{ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_6"}}, true},
+		{"NORMAL_TEXT", &docs.Paragraph{ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "NORMAL_TEXT"}}, false},
+		{"TITLE", &docs.Paragraph{ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "TITLE"}}, false},
+		{"nil style", &docs.Paragraph{}, false},
+		{"nil ParagraphStyle", &docs.Paragraph{ParagraphStyle: nil}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isHeadingParagraph(tt.para)
+			if got != tt.want {
+				t.Errorf("isHeadingParagraph: got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------- matchesNextStepsHeading tests ----------
+
+func TestMatchesNextStepsHeading(t *testing.T) {
+	tests := []struct {
+		name string
+		para *docs.Paragraph
+		want bool
+	}{
+		{
+			"Next steps with HEADING_2",
+			&docs.Paragraph{
+				Elements:       []*docs.ParagraphElement{{TextRun: &docs.TextRun{Content: "Next steps"}}},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+			true,
+		},
+		{
+			"Suggested next steps with HEADING_2",
+			&docs.Paragraph{
+				Elements:       []*docs.ParagraphElement{{TextRun: &docs.TextRun{Content: "Suggested next steps"}}},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+			true,
+		},
+		{
+			"NEXT STEPS all caps with HEADING_1",
+			&docs.Paragraph{
+				Elements:       []*docs.ParagraphElement{{TextRun: &docs.TextRun{Content: "NEXT STEPS"}}},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_1"},
+			},
+			true,
+		},
+		{
+			"Next steps with NORMAL_TEXT style",
+			&docs.Paragraph{
+				Elements:       []*docs.ParagraphElement{{TextRun: &docs.TextRun{Content: "Next steps"}}},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "NORMAL_TEXT"},
+			},
+			false,
+		},
+		{
+			"body text containing next steps as heading",
+			&docs.Paragraph{
+				Elements:       []*docs.ParagraphElement{{TextRun: &docs.TextRun{Content: "We discussed the next steps"}}},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+			false,
+		},
+		{
+			"whitespace-padded Next steps",
+			&docs.Paragraph{
+				Elements:       []*docs.ParagraphElement{{TextRun: &docs.TextRun{Content: " Next steps "}}},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+			true,
+		},
+		{
+			"empty text with HEADING_2",
+			&docs.Paragraph{
+				Elements:       []*docs.ParagraphElement{{TextRun: &docs.TextRun{Content: ""}}},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+			false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchesNextStepsHeading(tt.para)
+			if got != tt.want {
+				t.Errorf("matchesNextStepsHeading: got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// ---------- extractItemsFromSection: US1+US2 tests ----------
+
+func TestExtractItemsFromSection_NextStepsHeading(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 15, EndIndex: 50,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Jay will schedule meeting"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if !strings.Contains(items[0].Text, "Jay will schedule meeting") {
+		t.Errorf("item text: got %q", items[0].Text)
+	}
+}
+
+func TestExtractItemsFromSection_CaseInsensitive(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "NEXT STEPS"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 15, EndIndex: 50,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "A case insensitive task"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+}
+
+// ---------- extractItemsFromSection: US3 section boundary tests ----------
+
+func TestExtractItemsFromSection_SectionBoundary(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 15, EndIndex: 50,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Task in next steps section"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Meeting summary"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 80, EndIndex: 120,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Unrelated bullet from later section"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item (boundary enforcement), got %d", len(items))
+	}
+	if !strings.Contains(items[0].Text, "Task in next steps section") {
+		t.Errorf("item text: got %q", items[0].Text)
+	}
+}
+
+func TestExtractItemsFromSection_FirstMatchWins(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 15, EndIndex: 50,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "First section task"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Suggested next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 80, EndIndex: 120,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Second section task"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item (first match wins), got %d", len(items))
+	}
+	if !strings.Contains(items[0].Text, "First section task") {
+		t.Errorf("expected first section task, got %q", items[0].Text)
+	}
+}
+
+func TestExtractItemsFromSection_NoBoundary_EndOfDoc(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 15, EndIndex: 50,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Task one"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 50, EndIndex: 80,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Task two"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			StartIndex: 80, EndIndex: 110,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Task three"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items (no boundary, end of doc), got %d", len(items))
+	}
+}
+
+func TestExtractItemsFromSection_BoundaryAtDifferentHeadingLevel(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Next steps"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_2"},
+			},
+		},
+		{
+			StartIndex: 15, EndIndex: 50,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "A next steps task"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Details"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "HEADING_3"},
+			},
+		},
+		{
+			StartIndex: 80, EndIndex: 120,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Item under different heading level"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item (boundary at H3), got %d", len(items))
+	}
+}
+
+// ---------- extractItemsFromSection: US4 body text non-matching tests ----------
+
+func TestExtractItemsFromSection_BodyTextNotMatched(t *testing.T) {
+	svc := &Service{}
+	content := []*docs.StructuralElement{
+		{
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "We discussed the next steps for the project"}},
+				},
+				ParagraphStyle: &docs.ParagraphStyle{NamedStyleType: "NORMAL_TEXT"},
+			},
+		},
+		{
+			StartIndex: 50, EndIndex: 80,
+			Paragraph: &docs.Paragraph{
+				Elements: []*docs.ParagraphElement{
+					{TextRun: &docs.TextRun{Content: "Some bullet item"}},
+				},
+				Bullet:         &docs.Bullet{},
+				ParagraphStyle: &docs.ParagraphStyle{},
+			},
+		},
+	}
+
+	items, err := svc.extractItemsFromSection(content)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(items) != 0 {
+		t.Errorf("expected 0 items (body text should not match), got %d", len(items))
 	}
 }
 

@@ -99,10 +99,17 @@ A user runs the task assignment workflow against a meeting notes document that c
 - **SC-003**: When the next steps section is in the middle of a document, zero unrelated bullet items from subsequent sections are incorrectly extracted as tasks.
 - **SC-004**: Documents with no matching section heading are processed without errors, producing zero false task assignments.
 
+## Documentation Impact
+
+The following documentation files MUST be updated to reflect both heading names ("Next steps" and "Suggested next steps"):
+
+- `cmd/gcal-organizer/assign_tasks.go` — CLI help text (Long description)
+- `docs/SETUP.md` — Troubleshooting section referencing the section heading
+
 ## Assumptions
 
 - Google's Notes by Gemini uses standard heading styles (not plain bold/large text) for section headings, making them distinguishable from body text in the document structure.
 - The new "Next steps" heading may appear at any position in the document, not only at the end.
-- Google may continue to evolve the heading name in the future; the design should accommodate adding new candidate heading names easily.
+- Google may continue to evolve the heading name in the future; the design should accommodate adding new candidate heading names easily. If Google changes the heading name again, the tool will return empty results until the new name is added to the candidate list. A future enhancement could detect this condition (document has content but zero checkbox items extracted) and log a diagnostic hint.
 - The heading text match should be a full heading match (the heading's text content matches a candidate name), not a substring match against arbitrary paragraph text, to avoid false positives on body text that incidentally contains "next steps."
 - Older documents that were already processed before this change do not need reprocessing; this fix is forward-looking for new runs.

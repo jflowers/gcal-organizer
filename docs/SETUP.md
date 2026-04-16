@@ -195,7 +195,7 @@ This is required because Flatpak sandboxes Chrome by default, blocking access to
 ### Troubleshooting Browser Automation
 
 - **"Browser closed unexpectedly"**: Make sure Chrome is not already running, or that remote debugging is not conflicting with another instance.
-- **Tasks not assigned**: The script uses a hover-then-detect pattern. Ensure the Google Doc has the "Suggested next steps" checkboxes visible.
+- **Tasks not assigned**: The script uses a hover-then-detect pattern. Ensure the Google Doc has the "Next steps" (or "Suggested next steps") checkboxes visible.
 - **Flatpak Chrome can't access data directory**: Run `flatpak override --user --filesystem=~/.gcal-organizer com.google.Chrome` to grant access.
 
 ---

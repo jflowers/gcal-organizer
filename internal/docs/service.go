@@ -66,13 +66,20 @@ func (s *Service) GetDocument(ctx context.Context, docID string) (*docs.Document
 	return doc, nil
 }
 
-// SuggestedNextStepsHeading is the section heading to look for.
-const SuggestedNextStepsHeading = "Suggested next steps"
+// NextStepsHeadingCandidates lists accepted section heading names for checkbox extraction.
+// The first match in document order wins (FR-004).
+// Add new candidate names here as Google evolves the heading format.
+var NextStepsHeadingCandidates = []string{
+	"Next steps",
+	"Suggested next steps",
+}
 
 // NotesTabName is the tab name to target.
 const NotesTabName = "Notes"
 
-// ExtractCheckboxItems finds checkbox items in the "Suggested next steps" section of the "Notes" tab.
+// ExtractCheckboxItems finds checkbox items in the "Next steps" or "Suggested next steps"
+// section of the "Notes" tab. Returns an empty slice (not an error) if no matching
+// section heading is found (FR-006).
 func (s *Service) ExtractCheckboxItems(ctx context.Context, docID string) ([]*CheckboxItem, error) {
 	doc, err := s.GetDocument(ctx, docID)
 	if err != nil {
@@ -106,10 +113,12 @@ func (s *Service) ExtractCheckboxItems(ctx context.Context, docID string) ([]*Ch
 	return s.extractItemsFromSection(content)
 }
 
-// extractItemsFromSection extracts checkbox items from the "Suggested next steps" section.
+// extractItemsFromSection extracts checkbox items from the "Next steps" or
+// "Suggested next steps" section (FR-001, FR-002). Stops at the next heading
+// boundary (FR-003). Uses the first matching heading in document order (FR-004).
 func (s *Service) extractItemsFromSection(content []*docs.StructuralElement) ([]*CheckboxItem, error) {
 	var items []*CheckboxItem
-	inSuggestedSection := false
+	inSection := false
 
 	for _, elem := range content {
 		if elem.Paragraph == nil {
@@ -118,16 +127,17 @@ func (s *Service) extractItemsFromSection(content []*docs.StructuralElement) ([]
 
 		para := elem.Paragraph
 
-		// Check if this is the "Suggested next steps" heading
-		paraText := extractParagraphText(para)
-		if strings.Contains(strings.ToLower(paraText), strings.ToLower(SuggestedNextStepsHeading)) {
-			inSuggestedSection = true
+		// Check if this paragraph is the target section heading (FR-001, FR-002, FR-004)
+		if !inSection {
+			if matchesNextStepsHeading(para) {
+				inSection = true
+			}
 			continue
 		}
 
-		// If we haven't found the section yet, skip
-		if !inSuggestedSection {
-			continue
+		// Section boundary: stop at the next heading (FR-003)
+		if isHeadingParagraph(para) {
+			break
 		}
 
 		// Check if this is a list item (bullet or checkbox)
@@ -135,6 +145,7 @@ func (s *Service) extractItemsFromSection(content []*docs.StructuralElement) ([]
 			continue
 		}
 
+		paraText := extractParagraphText(para)
 		itemText := strings.TrimSpace(paraText)
 		if itemText == "" {
 			continue
@@ -175,6 +186,31 @@ func extractParagraphText(para *docs.Paragraph) string {
 		return r
 	}, text.String())
 	return strings.TrimSpace(cleaned)
+}
+
+// isHeadingParagraph returns true if the paragraph has a heading style (H1–H6).
+// Google Docs API represents headings via ParagraphStyle.NamedStyleType.
+func isHeadingParagraph(para *docs.Paragraph) bool {
+	if para.ParagraphStyle == nil {
+		return false
+	}
+	return strings.HasPrefix(para.ParagraphStyle.NamedStyleType, "HEADING_")
+}
+
+// matchesNextStepsHeading returns true if the paragraph is a heading whose text
+// matches one of the NextStepsHeadingCandidates (case-insensitive, full match).
+// Requires the paragraph to have a heading style to avoid matching body text.
+func matchesNextStepsHeading(para *docs.Paragraph) bool {
+	if !isHeadingParagraph(para) {
+		return false
+	}
+	text := strings.TrimSpace(extractParagraphText(para))
+	for _, candidate := range NextStepsHeadingCandidates {
+		if strings.EqualFold(text, candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 // DecisionsTabTitle is the title of the Decisions tab.

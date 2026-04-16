@@ -4,7 +4,7 @@
  * 
  * Uses Playwright to:
  * 1. Open a Google Doc with existing Chrome profile (via CDP)
- * 2. Find checkboxes in "Suggested next steps" section
+ * 2. Find checkboxes in "Next steps" (or "Suggested next steps") section
  * 3. Click the "Assign as a task" canvas widget for each checkbox
  * 4. Fill in the assignee email and confirm
  * 
@@ -46,6 +46,12 @@ interface ScriptOutput {
     results: AssignmentResult[];
     error?: string;
 }
+
+/**
+ * Section heading candidates to search for, in priority order (FR-005).
+ * The browser tries each in order; the first match found is used.
+ */
+const NEXT_STEPS_HEADINGS = ['Next steps', 'Suggested next steps'] as const;
 
 // Parse command line arguments
 function parseArgs(): { docId: string; assignments: Assignment[]; chromeProfilePath: string } {
@@ -181,7 +187,8 @@ async function main(): Promise<void> {
             // Give the doc time to render
             await page.waitForTimeout(2000);
 
-            // Navigate to the checkbox section by searching for the section header
+            // Navigate to the checkbox section by searching for the section header.
+            // Try each candidate heading in priority order (FR-005).
             const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
             log('Navigating to checkbox section...');
             log(`  KEY: ${modifier}+f (open find)`);
@@ -189,16 +196,45 @@ async function main(): Promise<void> {
             await page.waitForTimeout(500);
 
             const navFindInput = page.locator('.docs-findinput-input, input[aria-label="Find in document"]').first();
-            try {
-                await navFindInput.waitFor({ state: 'visible', timeout: 3000 });
-                log('  FILL: find input ← "Suggested next steps"');
-                await navFindInput.fill('');
-                await navFindInput.fill('Suggested next steps');
-                await page.waitForTimeout(500);
-            } catch {
-                log('  TYPE: "Suggested next steps" (fallback)');
-                await page.keyboard.type('Suggested next steps', { delay: 20 });
-                await page.waitForTimeout(500);
+            let sectionFound = false;
+
+            for (const heading of NEXT_STEPS_HEADINGS) {
+                try {
+                    await navFindInput.waitFor({ state: 'visible', timeout: 3000 });
+                    log(`  FILL: find input ← "${heading}"`);
+                    await navFindInput.fill('');
+                    await navFindInput.fill(heading);
+                    await page.waitForTimeout(500);
+                } catch {
+                    log(`  TYPE: "${heading}" (fallback)`);
+                    await page.keyboard.type(heading, { delay: 20 });
+                    await page.waitForTimeout(500);
+                }
+
+                // Check if the heading was found in the document
+                const matchInfo = await page.evaluate(() => {
+                    const countEl = document.querySelector('.docs-findinput-count');
+                    if (countEl) {
+                        const text = countEl.textContent || '';
+                        const match = text.match(/(\d+)\s+of\s+(\d+)/i);
+                        if (match) {
+                            return { current: parseInt(match[1]), total: parseInt(match[2]) };
+                        }
+                    }
+                    return null;
+                });
+
+                if (matchInfo && matchInfo.total > 0) {
+                    log(`  Found "${heading}" (${matchInfo.current} of ${matchInfo.total})`);
+                    sectionFound = true;
+                    break;
+                }
+
+                log(`  "${heading}" not found, trying next candidate...`);
+            }
+
+            if (!sectionFound) {
+                log('  WARNING: No matching section heading found in document (FR-007)');
             }
 
             log('  KEY: Enter (jump to match)');
