@@ -40,6 +40,7 @@ type mockDriveService struct {
 	isFileOwnedErr          map[string]error
 	canEditFileResults      map[string]bool
 	getFileNameResults      map[string]string
+	getFileNameErr          map[string]error
 }
 
 type shortcutCall struct {
@@ -142,6 +143,11 @@ func (m *mockDriveService) CanEditFile(_ context.Context, fileID string) bool {
 
 func (m *mockDriveService) GetFileName(_ context.Context, fileID string) (string, error) {
 	m.getFileNameCalls = append(m.getFileNameCalls, fileID)
+	if m.getFileNameErr != nil {
+		if err, ok := m.getFileNameErr[fileID]; ok {
+			return "", err
+		}
+	}
 	if m.getFileNameResults != nil {
 		if name, ok := m.getFileNameResults[fileID]; ok {
 			return name, nil
@@ -2050,5 +2056,146 @@ func TestExtractDecisionsForDoc_ExportFailureDoesNotBlockPipeline(t *testing.T) 
 	// Contract: decisions still counted as processed
 	if org.stats.DecisionsProcessed != 1 {
 		t.Errorf("DecisionsProcessed: got %d, want 1", org.stats.DecisionsProcessed)
+	}
+}
+
+func TestSyncCalendarAttachments_UsesGetFileNameForShortcut(t *testing.T) {
+	// When att.Title is a generic name like "Notes by Gemini", GetFileName()
+	// should be called and its result used as the shortcut name.
+	driveMock := &mockDriveService{
+		canEditFileResults: map[string]bool{"doc1": false},
+		getFileNameResults: map[string]string{
+			"doc1": "Sprint Planning - 2026/04/11 09:00 EST - Notes by Gemini",
+		},
+	}
+	calMock := &mockCalendarService{
+		listRecentEventsReturn: []*models.CalendarEvent{
+			{
+				ID:    "evt1",
+				Title: "Sprint Planning",
+				Start: time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC),
+				Attachments: []models.Attachment{
+					{FileID: "doc1", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+				},
+			},
+		},
+	}
+	cfg := config.DefaultConfig()
+	org := setupOrganizer(cfg, driveMock, calMock)
+
+	err := org.SyncCalendarAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: GetFileName was called for the attachment
+	if len(driveMock.getFileNameCalls) != 1 {
+		t.Fatalf("GetFileName calls: got %d, want 1", len(driveMock.getFileNameCalls))
+	}
+	if driveMock.getFileNameCalls[0] != "doc1" {
+		t.Errorf("GetFileName called with %q, want %q", driveMock.getFileNameCalls[0], "doc1")
+	}
+
+	// Contract: CreateShortcut used the Drive file name, not "Notes by Gemini"
+	if len(driveMock.createShortcutCalls) != 1 {
+		t.Fatalf("CreateShortcut calls: got %d, want 1", len(driveMock.createShortcutCalls))
+	}
+	got := driveMock.createShortcutCalls[0].fileName
+	want := "Sprint Planning - 2026/04/11 09:00 EST - Notes by Gemini"
+	if got != want {
+		t.Errorf("CreateShortcut fileName: got %q, want %q", got, want)
+	}
+}
+
+func TestSyncCalendarAttachments_FallsBackToAttTitle(t *testing.T) {
+	// When GetFileName() fails, fall back to att.Title.
+	driveMock := &mockDriveService{
+		canEditFileResults: map[string]bool{"doc1": false},
+		getFileNameErr:     map[string]error{"doc1": fmt.Errorf("permission denied")},
+	}
+	calMock := &mockCalendarService{
+		listRecentEventsReturn: []*models.CalendarEvent{
+			{
+				ID:    "evt1",
+				Title: "Weekly Sync",
+				Start: time.Date(2026, 4, 14, 10, 0, 0, 0, time.UTC),
+				Attachments: []models.Attachment{
+					{FileID: "doc1", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+				},
+			},
+		},
+	}
+	cfg := config.DefaultConfig()
+	org := setupOrganizer(cfg, driveMock, calMock)
+
+	err := org.SyncCalendarAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: GetFileName was called but failed
+	if len(driveMock.getFileNameCalls) != 1 {
+		t.Fatalf("GetFileName calls: got %d, want 1", len(driveMock.getFileNameCalls))
+	}
+
+	// Contract: CreateShortcut used att.Title as fallback
+	if len(driveMock.createShortcutCalls) != 1 {
+		t.Fatalf("CreateShortcut calls: got %d, want 1", len(driveMock.createShortcutCalls))
+	}
+	got := driveMock.createShortcutCalls[0].fileName
+	if got != "Notes by Gemini" {
+		t.Errorf("CreateShortcut fileName: got %q, want %q", got, "Notes by Gemini")
+	}
+}
+
+func TestSyncCalendarAttachments_CachesFileNameLookups(t *testing.T) {
+	// When two events reference the same file ID, GetFileName() is called only once.
+	driveMock := &mockDriveService{
+		canEditFileResults: map[string]bool{"doc1": false},
+		getFileNameResults: map[string]string{
+			"doc1": "Sprint Planning - Notes by Gemini",
+		},
+	}
+	calMock := &mockCalendarService{
+		listRecentEventsReturn: []*models.CalendarEvent{
+			{
+				ID:    "evt1",
+				Title: "Sprint Planning",
+				Start: time.Date(2026, 4, 11, 9, 0, 0, 0, time.UTC),
+				Attachments: []models.Attachment{
+					{FileID: "doc1", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+				},
+			},
+			{
+				ID:    "evt2",
+				Title: "Sprint Planning",
+				Start: time.Date(2026, 4, 18, 9, 0, 0, 0, time.UTC),
+				Attachments: []models.Attachment{
+					{FileID: "doc1", Title: "Notes by Gemini", MimeType: "application/vnd.google-apps.document"},
+				},
+			},
+		},
+	}
+	cfg := config.DefaultConfig()
+	org := setupOrganizer(cfg, driveMock, calMock)
+
+	err := org.SyncCalendarAttachments(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: GetFileName called only once despite two events with same file ID
+	if len(driveMock.getFileNameCalls) != 1 {
+		t.Errorf("GetFileName calls: got %d, want 1 (cache should prevent second call)", len(driveMock.getFileNameCalls))
+	}
+
+	// Contract: Both shortcuts used the cached Drive file name
+	if len(driveMock.createShortcutCalls) != 2 {
+		t.Fatalf("CreateShortcut calls: got %d, want 2", len(driveMock.createShortcutCalls))
+	}
+	for i, call := range driveMock.createShortcutCalls {
+		if call.fileName != "Sprint Planning - Notes by Gemini" {
+			t.Errorf("CreateShortcut[%d] fileName: got %q, want %q", i, call.fileName, "Sprint Planning - Notes by Gemini")
+		}
 	}
 }

@@ -396,6 +396,10 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 	o.stats.EventsProcessed = len(events)
 	o.logger.Info("Found calendar events", "count", len(events), "days", o.config.DaysToLookBack)
 
+	// Cross-event cache for Drive file name lookups to avoid redundant API calls
+	// when the same file ID appears across multiple calendar events.
+	fileNameCache := make(map[string]string)
+
 	for _, event := range events {
 		if len(event.Attachments) == 0 {
 			continue
@@ -436,23 +440,31 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 				continue
 			}
 
-			title := att.Title
-			if title == "" {
-				// Fetch actual filename from Drive
-				fileName, err := o.drive.GetFileName(ctx, att.FileID)
-				if err != nil {
-					title = fmt.Sprintf("attachment (%s...)", att.FileID[:min(8, len(att.FileID))])
-				} else {
-					title = fileName
-				}
+			// Always prefer the actual Drive file name over the calendar
+			// attachment title. The attachment title can be generic (e.g.,
+			// "Notes by Gemini") while the Drive file has a descriptive name.
+			var title string
+			if cached, ok := fileNameCache[att.FileID]; ok {
+				title = cached
+			} else if fileName, err := o.drive.GetFileName(ctx, att.FileID); err == nil {
+				title = fileName
+				fileNameCache[att.FileID] = fileName
+			} else if att.Title != "" {
+				title = att.Title
+			} else {
+				title = fmt.Sprintf("attachment (%s...)", att.FileID[:min(8, len(att.FileID))])
 			}
 
 			result := o.drive.CreateShortcut(ctx, att.FileID, title, folder.ID, folder.Name, folder.IsNew)
 			o.logCalendarAction(result, event.Title, event.Start.Format("2006-01-02"), title)
 
 			// Track Google Docs with "Notes" in the title for task assignment
+			// Use both the Drive file name and the attachment title for matching,
+			// since either may contain the keyword.
+			titleLower := strings.ToLower(title)
+			attTitleLower := strings.ToLower(att.Title)
 			if att.MimeType == "application/vnd.google-apps.document" &&
-				strings.Contains(strings.ToLower(title), "notes") {
+				(strings.Contains(titleLower, "notes") || strings.Contains(attTitleLower, "notes")) {
 				// When --owned-only is active, only collect owned docs for Step 3
 				if o.config.OwnedOnly {
 					if !isOwned(att.FileID) {
@@ -463,13 +475,13 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 			}
 
 			// Track Google Docs eligible for decision extraction (Step 4)
-			// Exact match "Notes by Gemini" or suffix "- Transcript"
+			// Use att.Title for classification (reliable pattern) and title for suffix matching
 			if att.MimeType == "application/vnd.google-apps.document" {
-				if title == "Notes by Gemini" {
+				if att.Title == "Notes by Gemini" || strings.HasSuffix(title, "- Notes by Gemini") {
 					// "Notes by Gemini" always wins in per-event deduplication
 					eventDecisionDocID = att.FileID
 					eventDecisionSource = "notes-by-gemini"
-				} else if strings.HasSuffix(title, "- Transcript") && eventDecisionSource != "notes-by-gemini" {
+				} else if (strings.HasSuffix(title, "- Transcript") || strings.HasSuffix(att.Title, "- Transcript")) && eventDecisionSource != "notes-by-gemini" {
 					// Only use transcript if no "Notes by Gemini" found yet for this event
 					eventDecisionDocID = att.FileID
 					eventDecisionSource = "transcript"
