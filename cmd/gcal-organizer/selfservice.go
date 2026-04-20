@@ -91,18 +91,31 @@ var doctorCmd = &cobra.Command{
 			failed++
 		}
 
-		// 2. .env file
+		// 2. Config file (config.yaml)
+		configFile := filepath.Join(configDir, "config.yaml")
 		envFile := filepath.Join(configDir, ".env")
-		if _, err := os.Stat(envFile); err == nil {
-			fmt.Println(styledPass("Environment file (.env) exists"))
+		if _, err := os.Stat(configFile); err == nil {
+			fmt.Println(styledPass("Config file (config.yaml) exists"))
 			if verbose {
-				fmt.Println(subtleStyle.Render("          " + envFile))
+				fmt.Println(subtleStyle.Render("          " + configFile))
 			}
 			passed++
 		} else {
-			fmt.Println(styledFail("Environment file ~/.gcal-organizer/.env not found"))
+			fmt.Println(styledFail("Config file ~/.gcal-organizer/config.yaml not found"))
 			fmt.Println(styledFix("Run 'gcal-organizer init'"))
 			failed++
+		}
+
+		// Transitional check: warn if .env still exists alongside config.yaml
+		if _, err := os.Stat(envFile); err == nil {
+			if _, yamlErr := os.Stat(configFile); yamlErr == nil {
+				fmt.Println(styledWarn("Legacy .env file still exists alongside config.yaml"))
+				fmt.Println(styledFix("The .env file can be safely deleted — config.yaml is the active config"))
+			} else {
+				fmt.Println(styledWarn("Legacy .env file found — will be migrated to config.yaml on next run"))
+				fmt.Println(styledFix("Run any gcal-organizer command to trigger automatic migration"))
+			}
+			warned++
 		}
 
 		// 3. Secret storage backend — must come before credential checks so
@@ -222,16 +235,13 @@ var doctorCmd = &cobra.Command{
 			failed++
 		}
 
-		// 6. GEMINI_API_KEY (check store first, then env/file fallback)
+		// 6. GEMINI_API_KEY (check store first, then env fallback)
 		apiKey := ""
 		if val, err := store.Get(secrets.KeyGeminiAPIKey); err == nil && val != "" {
 			apiKey = val
 		}
 		if apiKey == "" {
 			apiKey = os.Getenv("GEMINI_API_KEY")
-		}
-		if apiKey == "" {
-			apiKey = loadEnvValue(envFile, "GEMINI_API_KEY")
 		}
 		if apiKey != "" && apiKey != "your-gcp-api-key-here" {
 			prefix := apiKey[:min(4, len(apiKey))]
@@ -243,7 +253,7 @@ var doctorCmd = &cobra.Command{
 			failed++
 		} else {
 			fmt.Println(styledFail("GEMINI_API_KEY is not set"))
-			fmt.Println(styledFix("Run 'gcal-organizer init' or set in ~/.gcal-organizer/.env"))
+			fmt.Println(styledFix("Run 'gcal-organizer init' or set the GEMINI_API_KEY environment variable"))
 			failed++
 		}
 
@@ -355,14 +365,14 @@ var doctorCmd = &cobra.Command{
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Set up gcal-organizer configuration",
-	Long:  `Create the config directory and generate an environment file with your API keys.`,
+	Long:  `Create the config directory and generate a YAML configuration file with your API keys.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return fmt.Errorf("cannot determine home directory: %w", err)
 		}
 		configDir := filepath.Join(home, ".gcal-organizer")
-		envFile := filepath.Join(configDir, ".env")
+		configFile := filepath.Join(configDir, "config.yaml")
 		nonInteractive, _ := cmd.Flags().GetBool("non-interactive")
 		apiKey, _ := cmd.Flags().GetString("api-key")
 
@@ -383,8 +393,8 @@ var initCmd = &cobra.Command{
 		noKeyring := viper.GetBool("no-keyring")
 		store, backend := secrets.NewStore(noKeyring)
 
-		// 2. Generate .env file
-		if _, err := os.Stat(envFile); os.IsNotExist(err) {
+		// 2. Generate config.yaml (FR-006)
+		if _, err := os.Stat(configFile); os.IsNotExist(err) {
 			// Get API key
 			if apiKey == "" && !nonInteractive {
 				form := huh.NewForm(
@@ -404,29 +414,21 @@ var initCmd = &cobra.Command{
 				apiKey = "your-gcp-api-key-here"
 			}
 
-			// Store API key in SecretStore when keychain is available (T022)
-			storedInKeychain := false
+			// Store API key in SecretStore when keychain is available
 			if apiKey != "your-gcp-api-key-here" {
 				if err := store.Set(secrets.KeyGeminiAPIKey, apiKey); err == nil {
 					fmt.Println(styledPass(fmt.Sprintf("Gemini API key stored in %s", backend)))
-					if backend == secrets.BackendKeychain {
-						storedInKeychain = true
-					}
 				}
 			}
 
-			// Write .env — omit secrets when they're safely in the keychain
-			envContent := generateEnvFile(apiKey, storedInKeychain)
-			if err := os.WriteFile(envFile, []byte(envContent), 0600); err != nil {
-				return fmt.Errorf("failed to write .env file: %w", err)
+			// Write config.yaml with defaults and comments
+			yamlContent := generateConfigYAML()
+			if err := os.WriteFile(configFile, []byte(yamlContent), 0600); err != nil {
+				return fmt.Errorf("failed to write config.yaml: %w", err)
 			}
-			fmt.Println(styledPass("Created ~/.gcal-organizer/.env"))
+			fmt.Println(styledPass("Created ~/.gcal-organizer/config.yaml"))
 		} else {
-			fmt.Println(styledPass("Environment file already exists (skipped)"))
-			existing := loadEnvValue(envFile, "GEMINI_API_KEY")
-			if existing == "your-gcp-api-key-here" {
-				fmt.Println(styledWarn("GEMINI_API_KEY is still set to placeholder — edit ~/.gcal-organizer/.env"))
-			}
+			fmt.Println(styledPass("Config file already exists (skipped)"))
 		}
 
 		// 3. Check for credentials.json (store first, then file fallback)
@@ -675,11 +677,56 @@ func loadEnvValue(envFile, key string) string {
 	return ""
 }
 
+// generateConfigYAML creates the config.yaml file content with defaults and comments.
+// Secrets are not included — they are stored in the OS keychain.
+func generateConfigYAML() string {
+	var b strings.Builder
+	b.WriteString("# GCal Organizer Configuration\n")
+	b.WriteString("# Generated by 'gcal-organizer init'\n")
+	b.WriteString("# Secrets (API keys, credentials) are stored in the OS keychain.\n")
+	b.WriteString("# Run 'gcal-organizer doctor --verbose' to verify.\n\n")
+
+	b.WriteString("# Master folder name in Google Drive\n")
+	b.WriteString("master_folder_name: \"Meeting Notes\"\n\n")
+
+	b.WriteString("# Days to look back for calendar events\n")
+	b.WriteString("days_to_look_back: 1\n\n")
+
+	b.WriteString("# Keywords to filter relevant documents\n")
+	b.WriteString("filename_keywords:\n")
+	b.WriteString("  - \"Notes\"\n")
+	b.WriteString("  - \"Meeting\"\n\n")
+
+	b.WriteString("# Regex pattern for parsing document names\n")
+	b.WriteString("# filename_pattern: '(.+)\\s*-\\s*(\\d{4}-\\d{2}-\\d{2})'\n\n")
+
+	b.WriteString("# Gemini model to use\n")
+	b.WriteString("gemini_model: \"gemini-2.0-flash\"\n\n")
+
+	b.WriteString("# Path to Chrome profile for browser automation\n")
+	b.WriteString("# chrome_profile_path: \"~/.gcal-organizer/chrome-data\"\n\n")
+
+	b.WriteString("# Decision export configuration\n")
+	b.WriteString("decisions:\n")
+	b.WriteString("  # Output directory for decision markdown files\n")
+	b.WriteString("  export_dir: \"~/.gcal-organizer/decisions\"\n\n")
+	b.WriteString("  # Meeting allowlist: only export decisions for these meetings.\n")
+	b.WriteString("  # Matching is exact, case-insensitive.\n")
+	b.WriteString("  # When empty or absent, decisions are exported for all meetings.\n")
+	b.WriteString("  # meetings:\n")
+	b.WriteString("  #   - \"Sprint Planning\"\n")
+	b.WriteString("  #   - \"Design Review\"\n")
+	b.WriteString("  #   - \"Weekly Sync\"\n")
+
+	return b.String()
+}
+
 // generateEnvFile creates the .env file content.
 // When storedInKeychain is true, secrets (GEMINI_API_KEY and
 // GOOGLE_CREDENTIALS_FILE) are omitted since they live in the OS credential
 // store. This avoids the write-then-migrate cycle where init writes secrets
 // to .env and migration immediately strips them.
+// Deprecated: kept for backward compatibility. New installations use generateConfigYAML.
 func generateEnvFile(apiKey string, storedInKeychain bool) string {
 	var b strings.Builder
 	b.WriteString("# GCal Organizer Configuration\n")
@@ -925,24 +972,18 @@ func generateWrapper(binaryPath string) string {
 	// Single-quote binaryPath so spaces and shell metacharacters in the install
 	// path are handled safely. Embed any literal single-quotes via '\''.
 	quotedBin := "'" + strings.ReplaceAll(binaryPath, "'", "'\\''") + "'"
+	// FR-017: wrapper script does not source .env — the binary loads config
+	// from config.yaml internally.
 	return fmt.Sprintf(`#!/bin/bash
 # gcal-organizer service wrapper
 # Generated by 'gcal-organizer install'
 
 set -euo pipefail
 
-# Source env file if it exists
-ENV_FILE="${HOME}/.gcal-organizer/.env"
-if [ -f "$ENV_FILE" ]; then
-    set -a
-    source "$ENV_FILE"
-    set +a
-fi
-
 # Override days to look back for service mode (1 day)
 export GCAL_DAYS_TO_LOOK_BACK=1
 
-# --- Log rotation (FR-016) ---
+# --- Log rotation ---
 # Rotate log when it exceeds 5 MB, keeping one backup (.1).
 # Max disk usage: ~10 MB (5 MB active + 5 MB rotated).
 LOG_FILE="${HOME}/Library/Logs/gcal-organizer.log"
@@ -1005,12 +1046,9 @@ func generatePlist(wrapperPath, logPath, home, binaryPath string) string {
 }
 
 func generateSystemdService(wrapperPath, home string) string {
-	// systemd honours double-quotes around ExecStart arguments to handle paths
-	// containing spaces. EnvironmentFile does not support quoting, but the
-	// leading '-' (suppress-missing) is outside the path, so we place the path
-	// inside double-quotes immediately after the dash prefix isn't supported —
-	// instead we document that home directories with spaces require a symlink.
-	// ExecStart with double-quotes is correct per systemd.exec(5).
+	// FR-018: EnvironmentFile directive removed — the binary loads config
+	// from config.yaml internally. ExecStart with double-quotes is correct
+	// per systemd.exec(5) for paths containing spaces.
 	return fmt.Sprintf(`[Unit]
 Description=GCal Organizer - Meeting note organization
 Documentation=https://github.com/jflowers/gcal-organizer
@@ -1018,12 +1056,11 @@ Documentation=https://github.com/jflowers/gcal-organizer
 [Service]
 Type=oneshot
 ExecStart=/bin/bash "%s"
-EnvironmentFile=-%s/.gcal-organizer/.env
 Environment=HOME=%s
 
 [Install]
 WantedBy=default.target
-`, wrapperPath, home, home)
+`, wrapperPath, home)
 }
 
 func generateSystemdTimer() string {

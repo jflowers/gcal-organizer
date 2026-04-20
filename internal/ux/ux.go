@@ -35,7 +35,7 @@ func MissingCredentials(path string) *ActionError {
 func MissingAPIKey() *ActionError {
 	return &ActionError{
 		Message: "GEMINI_API_KEY is not set",
-		Fix:     "Set GEMINI_API_KEY in ~/.gcal-organizer/.env or run 'gcal-organizer init'",
+		Fix:     "Run 'gcal-organizer init' to configure your API key, or set the GEMINI_API_KEY environment variable",
 	}
 }
 

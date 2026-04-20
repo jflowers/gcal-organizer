@@ -19,8 +19,10 @@ Auto-generated from all feature plans. Last updated: 2026-02-17
 - N/A (no data persistence changes) (011-next-steps-heading)
 - Go 1.24.0 (toolchain go1.24.12) + `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/charmbracelet/log` (logging) — all existing; no new dependencies (012-decision-markdown-export)
 - Local filesystem (`~/.gcal-organizer/decisions/` default). No database. (012-decision-markdown-export)
+- Go 1.24.0 (toolchain go1.24.12) + `github.com/spf13/viper` (config), `github.com/spf13/cobra` (CLI), `github.com/charmbracelet/log` (logging), `github.com/zalando/go-keyring` (secrets) — all existing; no new dependencies (013-yaml-config-decision-export)
+- Local filesystem (`~/.gcal-organizer/config.yaml` replaces `~/.gcal-organizer/.env`). Secrets remain in OS keychain. (013-yaml-config-decision-export)
 
-- **Language**: Go 1.21+
+- **Language**: Go 1.24+
 - **CLI Framework**: github.com/spf13/cobra
 - **Google APIs**: Drive v3, Docs v1, Calendar v3, Tasks v1
 - **AI**: Gemini API via google.golang.org/genai
@@ -81,9 +83,9 @@ make install-hooks
 - New features require documentation before completion
 
 ## Recent Changes
+- 013-yaml-config-decision-export: Added Go 1.24.0 (toolchain go1.24.12) + `github.com/spf13/viper` (config), `github.com/spf13/cobra` (CLI), `github.com/charmbracelet/log` (logging), `github.com/zalando/go-keyring` (secrets) — all existing; no new dependencies
 - 012-decision-markdown-export: Added Go 1.24.0 (toolchain go1.24.12) + `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/charmbracelet/log` (logging) — all existing; no new dependencies
 - 011-next-steps-heading: Added Go 1.24+ (toolchain go1.24.12) + `google.golang.org/api/docs/v1` (Docs API), Playwright via `npx tsx` (browser automation)
-- 010-macos-signed-releases: Added Go 1.24.0 (toolchain go1.24.12) + GoReleaser v2 (CI only — `goreleaser/goreleaser-action`), `gh` CLI (release asset management), native macOS `codesign` + `xcrun notarytool` (signing/notarization)
 
 ### 001-gcal-organizer-cli
 Core CLI implementation with Google Workspace integration and Gemini AI for action item extraction.

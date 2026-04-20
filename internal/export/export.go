@@ -18,6 +18,24 @@ import (
 	"github.com/jflowers/gcal-organizer/pkg/models"
 )
 
+// ShouldExportDecisions returns true if the given meeting title should have
+// its decisions exported, based on the configured allowlist.
+// When the allowlist is empty or nil, all meetings are exported (backward
+// compatible, FR-011). When non-empty, only exact matches (case-insensitive)
+// are exported (FR-010). No substring matching (US2.3).
+func ShouldExportDecisions(title string, allowlist []string) bool {
+	if len(allowlist) == 0 {
+		return true
+	}
+	titleLower := strings.ToLower(title)
+	for _, allowed := range allowlist {
+		if strings.ToLower(allowed) == titleLower {
+			return true
+		}
+	}
+	return false
+}
+
 // Exporter writes decision markdown files to a local directory.
 // File I/O functions are injectable for testability (research.md D4).
 type Exporter struct {
@@ -49,33 +67,34 @@ func (e *Exporter) Export(ctx context.Context, decisions []models.Decision, meta
 		return nil
 	}
 
+	// FR-012: per-meeting subdirectory named by TopicSlug
+	// FR-013: filename uses YYYY-MM-DDTHH-MM.md format
 	slug := TopicSlug(meta.EventTitle)
-	dateStr := meta.EventDate.Format("2006-01-02")
-	filename := fmt.Sprintf("%s-%s.md", slug, dateStr)
-	fullPath := filepath.Join(e.outputDir, filename)
+	timeStr := meta.EventDate.Format("2006-01-02T15-04")
+	subDir := filepath.Join(e.outputDir, slug)
+	filename := timeStr + ".md"
+	fullPath := filepath.Join(subDir, filename)
 
-	// Dry-run: log what would happen and return (FR-011, research.md D7)
+	// Dry-run: log what would happen and return (FR-011)
 	if dryRun {
 		e.logger.Info("Would export decisions to file", "path", fullPath)
 		return nil
 	}
 
-	// Render markdown content
-	content := renderMarkdown(decisions, meta.EventTitle, meta.EventDate, meta.Attendees)
+	// Render markdown content (includes time and source in frontmatter)
+	content := renderMarkdown(decisions, meta.EventTitle, meta.EventDate, meta.Attendees, meta.DocID)
 
-	// Create output directory if needed (FR-007)
-	if err := e.mkdirAll(e.outputDir, 0o755); err != nil {
-		// FR-012: log warning, do not return error
-		e.logger.Warn("Failed to create decisions export directory",
-			"path", e.outputDir,
+	// FR-014: create per-meeting subdirectory if needed
+	if err := e.mkdirAll(subDir, 0o755); err != nil {
+		e.logger.Warn("Failed to create decisions export subdirectory",
+			"path", subDir,
 			"error", err,
 		)
-		return fmt.Errorf("create export directory: %w", err)
+		return fmt.Errorf("create export subdirectory: %w", err)
 	}
 
-	// Write file (FR-001, FR-008: overwrites existing)
+	// FR-015: overwrite existing file (idempotent)
 	if err := e.writeFile(fullPath, content, 0o644); err != nil {
-		// FR-012: log warning, do not return error
 		e.logger.Warn("Failed to write decisions markdown file",
 			"path", fullPath,
 			"error", err,
@@ -123,7 +142,8 @@ func CleanTopic(title string) string {
 
 // renderMarkdown produces a markdown document with YAML frontmatter and
 // categorized decision sections. Empty categories are omitted (FR-015).
-func renderMarkdown(decisions []models.Decision, topic string, date time.Time, attendees []string) []byte {
+// The docID parameter is used to generate the Google Doc source URL (FR-016).
+func renderMarkdown(decisions []models.Decision, topic string, date time.Time, attendees []string, docID string) []byte {
 	var b strings.Builder
 
 	cleanedTopic := CleanTopic(topic)
@@ -132,11 +152,16 @@ func renderMarkdown(decisions []models.Decision, topic string, date time.Time, a
 	b.WriteString("---\n")
 	b.WriteString(fmt.Sprintf("topic: %s\n", cleanedTopic))
 	b.WriteString(fmt.Sprintf("date: \"%s\"\n", date.Format("2006-01-02")))
+	b.WriteString(fmt.Sprintf("time: \"%s\"\n", date.Format("15:04")))
 	if len(attendees) > 0 {
 		b.WriteString("attendees:\n")
 		for _, a := range attendees {
 			b.WriteString(fmt.Sprintf("  - %s\n", a))
 		}
+	}
+	// FR-016: Google Doc source link for traceability
+	if docID != "" {
+		b.WriteString(fmt.Sprintf("source: https://docs.google.com/document/d/%s/edit\n", docID))
 	}
 	b.WriteString("---\n")
 
