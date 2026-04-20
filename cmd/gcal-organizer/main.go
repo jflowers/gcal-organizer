@@ -41,6 +41,13 @@ var (
 	verbose   bool
 	dryRun    bool
 	ownedOnly bool
+
+	// migrationPending is set by initConfig when a .env file is found
+	// and needs to be migrated to config.yaml after secret migration.
+	migrationPending bool
+	// pendingEnvPath and pendingYAMLPath store paths for deferred migration.
+	pendingEnvPath  string
+	pendingYAMLPath string
 )
 
 // mustBindPFlag wraps viper.BindPFlag and panics on error. Errors here indicate
@@ -109,6 +116,17 @@ func loadConfigAndStore() (*config.Config, secrets.SecretStore, secrets.Backend,
 
 		if err := secrets.Migrate(store, configDir, interactive, cfg.Verbose, promptFn); err != nil {
 			logging.Logger.Warn("Secret migration failed", "error", err)
+		}
+	}
+
+	// D5: Run .env → config.yaml migration after secret migration completes.
+	// This ensures secrets are safely in the keychain before .env is deleted.
+	if migrationPending {
+		home, _ := os.UserHomeDir()
+		if err := config.MigrateEnvToYAML(pendingEnvPath, pendingYAMLPath, home); err != nil {
+			logging.Logger.Warn("Config migration from .env to config.yaml failed", "error", err)
+		} else {
+			migrationPending = false
 		}
 	}
 
@@ -227,7 +245,7 @@ var runCmd = &cobra.Command{
 			}
 
 			// Create decision exporter with configured output directory
-			decisionExporter := export.NewExporter(cfg.DecisionsExportDir, logging.Logger)
+			decisionExporter := export.NewExporter(cfg.Decisions.ExportDir, logging.Logger)
 
 			// Initialize services once for all documents
 			docsSvc, geminiClient, initErr := initDocsAndGemini(ctx, cfg, store)
@@ -237,6 +255,11 @@ var runCmd = &cobra.Command{
 				totalFailed := 0
 
 				for _, docCtx := range decisionDocContexts {
+					// US2: Apply meeting allowlist filter before processing
+					if !export.ShouldExportDecisions(docCtx.EventTitle, cfg.Decisions.Meetings) {
+						logging.Logger.Debug("Skipping meeting not in allowlist", "title", docCtx.EventTitle)
+						continue
+					}
 					if !dryRun {
 						fmt.Printf("   📄 Processing doc %s (source: %s)\n", docCtx.DocID[:min(8, len(docCtx.DocID))], docCtx.Source)
 					}
@@ -348,7 +371,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	// Global flags
-	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gcal-organizer/.env)")
+	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.gcal-organizer/config.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "show what would be done without making changes")
 	rootCmd.PersistentFlags().BoolVar(&ownedOnly, "owned-only", false, "only mutate files you own; skip non-owned files")
@@ -389,19 +412,58 @@ func init() {
 }
 
 func initConfig() {
-	// Load .env file into process environment so viper picks up the values
 	home, err := os.UserHomeDir()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Error:", err)
 		os.Exit(1)
 	}
 
-	envFile := cfgFile
-	if envFile == "" {
-		envFile = filepath.Join(home, ".gcal-organizer", ".env")
+	configDir := filepath.Join(home, ".gcal-organizer")
+
+	// Determine config file paths based on --config flag or defaults.
+	// D6: detect format by extension. .env or files named ".env" → legacy path.
+	// .yaml/.yml → use directly. Default is config.yaml.
+	var yamlPath, envPath string
+
+	if cfgFile != "" {
+		// User specified a config file via --config flag
+		base := filepath.Base(cfgFile)
+		ext := filepath.Ext(cfgFile)
+		if base == ".env" || ext == ".env" {
+			// D6: .env file specified — use legacy path, schedule migration
+			envPath = cfgFile
+			yamlPath = filepath.Join(filepath.Dir(cfgFile), "config.yaml")
+		} else if ext == ".yaml" || ext == ".yml" {
+			yamlPath = cfgFile
+			envPath = filepath.Join(filepath.Dir(cfgFile), ".env")
+		} else {
+			// Unknown extension — treat as YAML
+			yamlPath = cfgFile
+			envPath = filepath.Join(filepath.Dir(cfgFile), ".env")
+		}
+	} else {
+		yamlPath = filepath.Join(configDir, "config.yaml")
+		envPath = filepath.Join(configDir, ".env")
 	}
 
-	config.LoadDotEnv(envFile, home)
+	// D5: Config loading flow
+	if _, err := os.Stat(yamlPath); err == nil {
+		// config.yaml exists — use viper's native YAML loading (FR-004)
+		viper.SetConfigFile(yamlPath)
+		viper.SetConfigType("yaml")
+		if err := viper.ReadInConfig(); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: error reading config file %s: %v\n", yamlPath, err)
+		}
+	} else if _, err := os.Stat(envPath); err == nil {
+		// .env exists but config.yaml does not — legacy path for first run.
+		// Load .env into process environment so viper picks up values.
+		// Migration will run after secret migration in loadConfigAndStore().
+		config.LoadDotEnv(envPath, home)
+		migrationPending = true
+		pendingEnvPath = envPath
+		pendingYAMLPath = yamlPath
+	}
+	// else: neither exists — defaults + env vars only
 
 	viper.AutomaticEnv()
 

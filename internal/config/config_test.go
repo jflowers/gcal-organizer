@@ -151,7 +151,7 @@ func TestConfigLoad_NoKeyring(t *testing.T) {
 	}
 }
 
-// ---------- T029: DefaultConfig sets DecisionsExportDir ----------
+// ---------- T029: DefaultConfig sets Decisions.ExportDir ----------
 
 func TestDefaultConfig_DecisionsExportDir(t *testing.T) {
 	cfg := DefaultConfig()
@@ -162,12 +162,12 @@ func TestDefaultConfig_DecisionsExportDir(t *testing.T) {
 	}
 
 	want := filepath.Join(home, ".gcal-organizer", "decisions")
-	if cfg.DecisionsExportDir != want {
-		t.Errorf("DecisionsExportDir: got %q, want %q", cfg.DecisionsExportDir, want)
+	if cfg.Decisions.ExportDir != want {
+		t.Errorf("Decisions.ExportDir: got %q, want %q", cfg.Decisions.ExportDir, want)
 	}
 }
 
-// ---------- T030: Tilde expansion for DecisionsExportDir ----------
+// ---------- T030: Tilde expansion for Decisions.ExportDir ----------
 
 func TestLoad_DecisionsExportDir_TildeExpansion(t *testing.T) {
 	os.Setenv("GCAL_DECISIONS_EXPORT_DIR", "~/custom-decisions")
@@ -179,14 +179,23 @@ func TestLoad_DecisionsExportDir_TildeExpansion(t *testing.T) {
 	}
 
 	// Should be expanded to an absolute path
-	if strings.HasPrefix(cfg.DecisionsExportDir, "~/") {
-		t.Errorf("DecisionsExportDir should be expanded, got %q", cfg.DecisionsExportDir)
+	if strings.HasPrefix(cfg.Decisions.ExportDir, "~/") {
+		t.Errorf("Decisions.ExportDir should be expanded, got %q", cfg.Decisions.ExportDir)
 	}
 
 	home, _ := os.UserHomeDir()
 	want := filepath.Join(home, "custom-decisions")
-	if cfg.DecisionsExportDir != want {
-		t.Errorf("DecisionsExportDir: got %q, want %q", cfg.DecisionsExportDir, want)
+	if cfg.Decisions.ExportDir != want {
+		t.Errorf("Decisions.ExportDir: got %q, want %q", cfg.Decisions.ExportDir, want)
+	}
+}
+
+// ---------- T05: DefaultConfig sets Decisions.Meetings to nil ----------
+
+func TestDefaultConfig_DecisionsMeetingsNil(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Decisions.Meetings != nil {
+		t.Errorf("Decisions.Meetings should be nil by default, got %v", cfg.Decisions.Meetings)
 	}
 }
 

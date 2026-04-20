@@ -21,49 +21,61 @@ func mustBindEnv(args ...string) {
 	}
 }
 
+// DecisionsConfig holds configuration for the decision export feature.
+type DecisionsConfig struct {
+	// ExportDir is the output directory for decision markdown files.
+	ExportDir string `mapstructure:"export_dir"`
+
+	// Meetings is the allowlist of meeting titles for decision export.
+	// When non-empty, only meetings whose titles exactly match (case-insensitive)
+	// an entry in this list will have decisions exported.
+	// When empty or nil, decisions are exported for all meetings.
+	Meetings []string `mapstructure:"meetings"`
+}
+
 // Config holds all configuration values for the application.
 type Config struct {
 	// MasterFolderName is the name of the master folder in Google Drive
-	MasterFolderName string
+	MasterFolderName string `mapstructure:"master_folder_name"`
 
 	// DaysToLookBack is the number of days to scan for calendar events
-	DaysToLookBack int
+	DaysToLookBack int `mapstructure:"days_to_look_back"`
 
 	// FilenamePattern is the regex pattern for parsing document names
-	FilenamePattern string
+	FilenamePattern string `mapstructure:"filename_pattern"`
 
 	// FilenameKeywords are keywords used to filter relevant documents
-	FilenameKeywords []string
+	FilenameKeywords []string `mapstructure:"filename_keywords"`
 
 	// GeminiAPIKey is the GCP API key for Gemini
-	GeminiAPIKey string
+	GeminiAPIKey string // Not in YAML — loaded from keychain/env
 
 	// GeminiModel is the Gemini model to use
-	GeminiModel string
+	GeminiModel string `mapstructure:"gemini_model"`
 
 	// CredentialsFile is the path to the Google OAuth credentials file
-	CredentialsFile string
+	CredentialsFile string // Not in YAML — loaded from keychain/env
 
 	// TokenFile is the path to store OAuth tokens (legacy, used by FileStore)
-	TokenFile string
+	TokenFile string // Legacy, used by FileStore
 
 	// Verbose enables verbose output
-	Verbose bool
+	Verbose bool // CLI flag only
 
 	// DryRun prevents making changes
-	DryRun bool
+	DryRun bool // CLI flag only
 
 	// OwnedOnly restricts mutations to files owned by the authenticated user
-	OwnedOnly bool
+	OwnedOnly bool // CLI flag only
 
 	// NoKeyring disables OS credential store; use file-based storage
-	NoKeyring bool
+	NoKeyring bool // CLI flag only
 
 	// ChromeProfilePath is the path to Chrome profile for browser automation
-	ChromeProfilePath string
+	ChromeProfilePath string `mapstructure:"chrome_profile_path"`
 
-	// DecisionsExportDir is the output directory for decision markdown files
-	DecisionsExportDir string
+	// Decisions holds configuration for the decision export feature.
+	Decisions DecisionsConfig `mapstructure:"decisions"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -73,15 +85,17 @@ func DefaultConfig() *Config {
 	configDir := filepath.Join(home, ".gcal-organizer")
 
 	return &Config{
-		MasterFolderName:   "Meeting Notes",
-		DaysToLookBack:     1,
-		FilenamePattern:    `(.+)\s*-\s*(\d{4}-\d{2}-\d{2})`,
-		FilenameKeywords:   []string{"Notes", "Meeting"},
-		GeminiModel:        "gemini-2.0-flash",
-		CredentialsFile:    filepath.Join(configDir, "credentials.json"),
-		TokenFile:          filepath.Join(configDir, "token.json"),
-		ChromeProfilePath:  filepath.Join(configDir, "chrome-data"),
-		DecisionsExportDir: filepath.Join(configDir, "decisions"),
+		MasterFolderName:  "Meeting Notes",
+		DaysToLookBack:    1,
+		FilenamePattern:   `(.+)\s*-\s*(\d{4}-\d{2}-\d{2})`,
+		FilenameKeywords:  []string{"Notes", "Meeting"},
+		GeminiModel:       "gemini-2.0-flash",
+		CredentialsFile:   filepath.Join(configDir, "credentials.json"),
+		TokenFile:         filepath.Join(configDir, "token.json"),
+		ChromeProfilePath: filepath.Join(configDir, "chrome-data"),
+		Decisions: DecisionsConfig{
+			ExportDir: filepath.Join(configDir, "decisions"),
+		},
 	}
 }
 
@@ -104,7 +118,8 @@ func Load() (*Config, error) {
 	mustBindEnv("credentials_file", "GOOGLE_CREDENTIALS_FILE")
 	mustBindEnv("owned-only", "GCAL_OWNED_ONLY")
 	mustBindEnv("no-keyring", "GCAL_NO_KEYRING")
-	mustBindEnv("decisions_export_dir", "GCAL_DECISIONS_EXPORT_DIR")
+	mustBindEnv("decisions.export_dir", "GCAL_DECISIONS_EXPORT_DIR")
+	mustBindEnv("decisions.meetings", "GCAL_DECISIONS_MEETINGS")
 
 	// Override defaults with viper values
 	if v := viper.GetString("master_folder_name"); v != "" {
@@ -116,9 +131,16 @@ func Load() (*Config, error) {
 	if v := viper.GetString("filename_pattern"); v != "" {
 		cfg.FilenamePattern = v
 	}
-	if v := viper.GetString("filename_keywords"); v != "" {
+
+	// filename_keywords: YAML provides a native list; env var uses comma-separated string.
+	// viper.GetStringSlice handles both cases when the value comes from YAML.
+	// For env var overrides, check the raw string and split on comma.
+	if keywords := viper.GetStringSlice("filename_keywords"); len(keywords) > 0 {
+		cfg.FilenameKeywords = keywords
+	} else if v := viper.GetString("filename_keywords"); v != "" {
 		cfg.FilenameKeywords = strings.Split(v, ",")
 	}
+
 	if v := viper.GetString("gemini_api_key"); v != "" {
 		cfg.GeminiAPIKey = v
 	}
@@ -129,8 +151,13 @@ func Load() (*Config, error) {
 		cfg.CredentialsFile = v
 	}
 
-	if v := viper.GetString("decisions_export_dir"); v != "" {
-		cfg.DecisionsExportDir = v
+	if v := viper.GetString("decisions.export_dir"); v != "" {
+		cfg.Decisions.ExportDir = v
+	}
+
+	// decisions.meetings: YAML provides a native list; env var uses comma-separated string.
+	if meetings := viper.GetStringSlice("decisions.meetings"); len(meetings) > 0 {
+		cfg.Decisions.Meetings = meetings
 	}
 
 	cfg.Verbose = viper.GetBool("verbose")
@@ -138,11 +165,11 @@ func Load() (*Config, error) {
 	cfg.OwnedOnly = viper.GetBool("owned-only")
 	cfg.NoKeyring = viper.GetBool("no-keyring")
 
-	// Expand tilde in DecisionsExportDir, consistent with CredentialsFile/TokenFile handling
-	if strings.HasPrefix(cfg.DecisionsExportDir, "~/") {
+	// Expand tilde in Decisions.ExportDir, consistent with CredentialsFile/TokenFile handling
+	if strings.HasPrefix(cfg.Decisions.ExportDir, "~/") {
 		home, err := os.UserHomeDir()
 		if err == nil {
-			cfg.DecisionsExportDir = filepath.Join(home, cfg.DecisionsExportDir[2:])
+			cfg.Decisions.ExportDir = filepath.Join(home, cfg.Decisions.ExportDir[2:])
 		}
 	}
 
