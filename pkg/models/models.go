@@ -127,6 +127,22 @@ type TranscriptContent struct {
 	Headings []TranscriptHeading `json:"headings"`
 }
 
+// DecisionDocContext carries meeting metadata alongside a Google Doc ID
+// for the decision extraction pipeline. Provides event title, date, and
+// attendees needed for markdown export.
+type DecisionDocContext struct {
+	// DocID is the Google Drive file ID
+	DocID string
+	// Source indicates which attachment pattern matched ("notes-by-gemini" or "transcript")
+	Source string
+	// EventTitle is the calendar event title, used to derive topic slug and frontmatter
+	EventTitle string
+	// EventDate is the calendar event start time, used for filename and frontmatter
+	EventDate time.Time
+	// Attendees are attendee email addresses (excluding self and resources)
+	Attendees []string
+}
+
 // Attendee represents a calendar event attendee.
 type Attendee struct {
 	// Email is the attendee's email address

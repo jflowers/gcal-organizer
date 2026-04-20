@@ -192,6 +192,7 @@ GCAL_OWNED_ONLY=true                      # Default: false (only mutate owned fi
 GCAL_FILENAME_KEYWORDS="Notes,Meeting"    # Comma-separated
 GCAL_FILENAME_PATTERN="(.+)\s*-\s*(\d{4}-\d{2}-\d{2})"
 GEMINI_MODEL="gemini-2.0-flash"           # Default: gemini-2.0-flash
+GCAL_DECISIONS_EXPORT_DIR="~/.gcal-organizer/decisions"  # Default
 ```
 
 ## 🔒 Data Privacy
@@ -240,6 +241,11 @@ Step 4 automatically processes meeting transcript documents to extract and categ
    - **Decisions Deferred** -- items explicitly tabled for later
    - **Open Items** -- unresolved topics needing further discussion
 4. A new "Decisions" tab is created in the document with clickable timestamp links back to the transcript
+5. A local markdown copy is written to `~/.gcal-organizer/decisions/` with YAML frontmatter (`topic`, `date`, `attendees`) for indexing by semantic search tools
+
+**Markdown Export**: Each exported file uses the naming convention `<topic-slug>-<YYYY-MM-DD>.md` and contains categorized decision sections. Empty categories are omitted. Files are overwritten on reprocessing (idempotent). Export failures are logged as warnings but never block the pipeline.
+
+**Configure export directory**: Set `GCAL_DECISIONS_EXPORT_DIR` or add `decisions_export_dir` to your config file to change the output location. The `~` shorthand is expanded automatically.
 
 **Idempotent**: Documents with an existing "Decisions" tab are automatically skipped. Safe to run repeatedly.
 
@@ -256,6 +262,7 @@ gcal-organizer/
 │   ├── config/                # Configuration management
 │   ├── docs/                  # Docs checkbox extraction + decision tab creation
 │   ├── drive/                 # Drive folder/file operations
+│   ├── export/                # Decision markdown export (local files)
 │   ├── gemini/                # Gemini AI assignee + decision extraction
 │   └── organizer/             # Workflow orchestration
 ├── browser/                   # Playwright task assignment script (TypeScript)

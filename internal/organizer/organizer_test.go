@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jflowers/gcal-organizer/internal/config"
 	"github.com/jflowers/gcal-organizer/internal/docs"
@@ -164,13 +165,26 @@ func (m *mockCalendarService) ListRecentEvents(_ context.Context, _ int) ([]*mod
 // setupOrganizer creates an Organizer with mock services for testing.
 func setupOrganizer(cfg *config.Config, driveMock *mockDriveService, calMock *mockCalendarService) *Organizer {
 	return &Organizer{
-		config:         cfg,
-		drive:          driveMock,
-		calendar:       calMock,
-		logger:         logging.Logger,
-		notesDocIDs:    make(map[string]bool),
-		decisionDocIDs: make(map[string]string),
+		config:              cfg,
+		drive:               driveMock,
+		calendar:            calMock,
+		logger:              logging.Logger,
+		notesDocIDs:         make(map[string]bool),
+		decisionDocContexts: make(map[string]models.DecisionDocContext),
 	}
+}
+
+// mockDecisionExporter implements DecisionExporter for testing.
+type mockDecisionExporter struct {
+	exportCalls int
+	exportErr   error
+	lastMeta    models.DecisionDocContext
+}
+
+func (m *mockDecisionExporter) Export(_ context.Context, _ []models.Decision, meta models.DecisionDocContext, _ bool) error {
+	m.exportCalls++
+	m.lastMeta = meta
+	return m.exportErr
 }
 
 // ---------- T009: OrganizeDocuments ownership filtering tests ----------
@@ -621,19 +635,19 @@ func TestDecisionDocCollection(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			gotDocIDs := org.GetDecisionDocIDs()
-			if len(gotDocIDs) != tt.wantDocCount {
-				t.Errorf("expected %d decision doc IDs, got %d: %v", tt.wantDocCount, len(gotDocIDs), gotDocIDs)
+			gotDocContexts := org.GetDecisionDocContexts()
+			if len(gotDocContexts) != tt.wantDocCount {
+				t.Errorf("expected %d decision doc contexts, got %d: %v", tt.wantDocCount, len(gotDocContexts), gotDocContexts)
 			}
 
 			for wantID, wantSource := range tt.wantDocIDs {
-				gotSource, ok := gotDocIDs[wantID]
+				gotCtx, ok := gotDocContexts[wantID]
 				if !ok {
-					t.Errorf("expected doc ID %s in decisionDocIDs, but not found", wantID)
+					t.Errorf("expected doc ID %s in decisionDocContexts, but not found", wantID)
 					continue
 				}
-				if gotSource != wantSource {
-					t.Errorf("doc %s: expected source %q, got %q", wantID, wantSource, gotSource)
+				if gotCtx.Source != wantSource {
+					t.Errorf("doc %s: expected source %q, got %q", wantID, wantSource, gotCtx.Source)
 				}
 			}
 		})
@@ -1361,8 +1375,8 @@ func TestSyncCalendarAttachments_EmptyEventsList(t *testing.T) {
 	if len(org.GetNotesDocIDs()) != 0 {
 		t.Errorf("notesDocIDs: got %d, want 0", len(org.GetNotesDocIDs()))
 	}
-	if len(org.GetDecisionDocIDs()) != 0 {
-		t.Errorf("decisionDocIDs: got %d, want 0", len(org.GetDecisionDocIDs()))
+	if len(org.GetDecisionDocContexts()) != 0 {
+		t.Errorf("decisionDocContexts: got %d, want 0", len(org.GetDecisionDocContexts()))
 	}
 }
 
@@ -1467,8 +1481,8 @@ func TestNew(t *testing.T) {
 	if org.notesDocIDs == nil {
 		t.Error("New did not initialize notesDocIDs map")
 	}
-	if org.decisionDocIDs == nil {
-		t.Error("New did not initialize decisionDocIDs map")
+	if org.decisionDocContexts == nil {
+		t.Error("New did not initialize decisionDocContexts map")
 	}
 }
 
@@ -1894,7 +1908,16 @@ func TestExtractDecisionsForDoc(t *testing.T) {
 			cfg := config.DefaultConfig()
 			org := setupOrganizer(cfg, driveMock, calMock)
 
-			err := org.ExtractDecisionsForDoc(context.Background(), "test-doc-id", tt.docsSvc, tt.geminiSvc, tt.dryRun)
+			docCtx := models.DecisionDocContext{
+				DocID:      "test-doc-id",
+				Source:     "notes-by-gemini",
+				EventTitle: "Test Meeting",
+				EventDate:  time.Date(2026, 4, 18, 14, 0, 0, 0, time.UTC),
+				Attendees:  []string{"alice@example.com"},
+			}
+			exporter := &mockDecisionExporter{}
+
+			err := org.ExtractDecisionsForDoc(context.Background(), docCtx, tt.docsSvc, tt.geminiSvc, exporter, tt.dryRun)
 
 			if tt.wantErr {
 				if err == nil {
@@ -1927,5 +1950,105 @@ func TestExtractDecisionsForDoc(t *testing.T) {
 				t.Errorf("ExtractDecisions calls: got %d, want %d", tt.geminiSvc.extractCalls, tt.wantGeminiCalls)
 			}
 		})
+	}
+}
+
+// ---------- T024b: Integration test for ExtractDecisionsForDoc with exporter ----------
+
+func TestExtractDecisionsForDoc_ExporterCalled(t *testing.T) {
+	// Verify exporter is called after CreateDecisionsTab succeeds
+	docsSvc := &mockDocsService{
+		hasDecisionsTab: false,
+		transcriptContent: &models.TranscriptContent{
+			TabID:    "tab1",
+			FullText: "Meeting transcript with decisions",
+		},
+	}
+	geminiSvc := &mockGeminiService{
+		decisions: []models.Decision{
+			{Category: "made", Text: "Adopt new pipeline"},
+		},
+	}
+	exporter := &mockDecisionExporter{}
+
+	driveMock := &mockDriveService{}
+	calMock := &mockCalendarService{}
+	cfg := config.DefaultConfig()
+	org := setupOrganizer(cfg, driveMock, calMock)
+
+	docCtx := models.DecisionDocContext{
+		DocID:      "test-doc-id",
+		Source:     "notes-by-gemini",
+		EventTitle: "Weekly Sync",
+		EventDate:  time.Date(2026, 4, 18, 14, 0, 0, 0, time.UTC),
+		Attendees:  []string{"alice@example.com"},
+	}
+
+	err := org.ExtractDecisionsForDoc(context.Background(), docCtx, docsSvc, geminiSvc, exporter, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Contract: exporter was called
+	if exporter.exportCalls != 1 {
+		t.Errorf("Export calls: got %d, want 1", exporter.exportCalls)
+	}
+
+	// Contract: export stats incremented
+	if org.stats.DecisionsExported != 1 {
+		t.Errorf("DecisionsExported: got %d, want 1", org.stats.DecisionsExported)
+	}
+}
+
+func TestExtractDecisionsForDoc_ExportFailureDoesNotBlockPipeline(t *testing.T) {
+	// FR-012: export failure must not cause ExtractDecisionsForDoc to return an error
+	docsSvc := &mockDocsService{
+		hasDecisionsTab: false,
+		transcriptContent: &models.TranscriptContent{
+			TabID:    "tab1",
+			FullText: "Meeting transcript with decisions",
+		},
+	}
+	geminiSvc := &mockGeminiService{
+		decisions: []models.Decision{
+			{Category: "made", Text: "Adopt new pipeline"},
+		},
+	}
+	exporter := &mockDecisionExporter{
+		exportErr: fmt.Errorf("permission denied"),
+	}
+
+	driveMock := &mockDriveService{}
+	calMock := &mockCalendarService{}
+	cfg := config.DefaultConfig()
+	org := setupOrganizer(cfg, driveMock, calMock)
+
+	docCtx := models.DecisionDocContext{
+		DocID:      "test-doc-id",
+		Source:     "notes-by-gemini",
+		EventTitle: "Weekly Sync",
+		EventDate:  time.Date(2026, 4, 18, 14, 0, 0, 0, time.UTC),
+		Attendees:  []string{"alice@example.com"},
+	}
+
+	// FR-012: ExtractDecisionsForDoc must NOT return an error when export fails
+	err := org.ExtractDecisionsForDoc(context.Background(), docCtx, docsSvc, geminiSvc, exporter, false)
+	if err != nil {
+		t.Fatalf("ExtractDecisionsForDoc should not return error on export failure, got: %v", err)
+	}
+
+	// Contract: CreateDecisionsTab was still called successfully
+	if docsSvc.createDecisionsTabCalls != 1 {
+		t.Errorf("CreateDecisionsTab calls: got %d, want 1", docsSvc.createDecisionsTabCalls)
+	}
+
+	// Contract: export failure tracked in stats
+	if org.stats.DecisionsExportFailed != 1 {
+		t.Errorf("DecisionsExportFailed: got %d, want 1", org.stats.DecisionsExportFailed)
+	}
+
+	// Contract: decisions still counted as processed
+	if org.stats.DecisionsProcessed != 1 {
+		t.Errorf("DecisionsProcessed: got %d, want 1", org.stats.DecisionsProcessed)
 	}
 }

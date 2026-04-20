@@ -61,6 +61,9 @@ type Config struct {
 
 	// ChromeProfilePath is the path to Chrome profile for browser automation
 	ChromeProfilePath string
+
+	// DecisionsExportDir is the output directory for decision markdown files
+	DecisionsExportDir string
 }
 
 // DefaultConfig returns a Config with default values.
@@ -70,14 +73,15 @@ func DefaultConfig() *Config {
 	configDir := filepath.Join(home, ".gcal-organizer")
 
 	return &Config{
-		MasterFolderName:  "Meeting Notes",
-		DaysToLookBack:    1,
-		FilenamePattern:   `(.+)\s*-\s*(\d{4}-\d{2}-\d{2})`,
-		FilenameKeywords:  []string{"Notes", "Meeting"},
-		GeminiModel:       "gemini-2.0-flash",
-		CredentialsFile:   filepath.Join(configDir, "credentials.json"),
-		TokenFile:         filepath.Join(configDir, "token.json"),
-		ChromeProfilePath: filepath.Join(configDir, "chrome-data"),
+		MasterFolderName:   "Meeting Notes",
+		DaysToLookBack:     1,
+		FilenamePattern:    `(.+)\s*-\s*(\d{4}-\d{2}-\d{2})`,
+		FilenameKeywords:   []string{"Notes", "Meeting"},
+		GeminiModel:        "gemini-2.0-flash",
+		CredentialsFile:    filepath.Join(configDir, "credentials.json"),
+		TokenFile:          filepath.Join(configDir, "token.json"),
+		ChromeProfilePath:  filepath.Join(configDir, "chrome-data"),
+		DecisionsExportDir: filepath.Join(configDir, "decisions"),
 	}
 }
 
@@ -100,6 +104,7 @@ func Load() (*Config, error) {
 	mustBindEnv("credentials_file", "GOOGLE_CREDENTIALS_FILE")
 	mustBindEnv("owned-only", "GCAL_OWNED_ONLY")
 	mustBindEnv("no-keyring", "GCAL_NO_KEYRING")
+	mustBindEnv("decisions_export_dir", "GCAL_DECISIONS_EXPORT_DIR")
 
 	// Override defaults with viper values
 	if v := viper.GetString("master_folder_name"); v != "" {
@@ -124,10 +129,22 @@ func Load() (*Config, error) {
 		cfg.CredentialsFile = v
 	}
 
+	if v := viper.GetString("decisions_export_dir"); v != "" {
+		cfg.DecisionsExportDir = v
+	}
+
 	cfg.Verbose = viper.GetBool("verbose")
 	cfg.DryRun = viper.GetBool("dry-run")
 	cfg.OwnedOnly = viper.GetBool("owned-only")
 	cfg.NoKeyring = viper.GetBool("no-keyring")
+
+	// Expand tilde in DecisionsExportDir, consistent with CredentialsFile/TokenFile handling
+	if strings.HasPrefix(cfg.DecisionsExportDir, "~/") {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			cfg.DecisionsExportDir = filepath.Join(home, cfg.DecisionsExportDir[2:])
+		}
+	}
 
 	return cfg, nil
 }

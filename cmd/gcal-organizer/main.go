@@ -21,6 +21,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/calendar"
 	"github.com/jflowers/gcal-organizer/internal/config"
 	"github.com/jflowers/gcal-organizer/internal/drive"
+	"github.com/jflowers/gcal-organizer/internal/export"
 	"github.com/jflowers/gcal-organizer/internal/logging"
 	"github.com/jflowers/gcal-organizer/internal/organizer"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
@@ -212,18 +213,21 @@ var runCmd = &cobra.Command{
 		}
 
 		// Step 4: Extract Decisions from transcript documents
-		decisionDocIDs := org.GetDecisionDocIDs()
-		if ownedOnly && len(decisionDocIDs) == 0 {
+		decisionDocContexts := org.GetDecisionDocContexts()
+		if ownedOnly && len(decisionDocContexts) == 0 {
 			fmt.Println("📋 STEP 4: No owned transcript documents found for decision extraction")
 		}
-		if len(decisionDocIDs) > 0 {
+		if len(decisionDocContexts) > 0 {
 			if dryRun {
-				fmt.Printf("📋 STEP 4: Would extract decisions from %d transcript documents\n", len(decisionDocIDs))
+				fmt.Printf("📋 STEP 4: Would extract decisions from %d transcript documents\n", len(decisionDocContexts))
 			} else {
 				fmt.Println("📋 STEP 4: Extracting Decisions")
 				fmt.Println("───────────────────────────────────────────────────────────")
-				fmt.Printf("   Found %d transcript documents to process\n", len(decisionDocIDs))
+				fmt.Printf("   Found %d transcript documents to process\n", len(decisionDocContexts))
 			}
+
+			// Create decision exporter with configured output directory
+			decisionExporter := export.NewExporter(cfg.DecisionsExportDir, logging.Logger)
 
 			// Initialize services once for all documents
 			docsSvc, geminiClient, initErr := initDocsAndGemini(ctx, cfg, store)
@@ -232,13 +236,13 @@ var runCmd = &cobra.Command{
 			} else {
 				totalFailed := 0
 
-				for docID, source := range decisionDocIDs {
+				for _, docCtx := range decisionDocContexts {
 					if !dryRun {
-						fmt.Printf("   📄 Processing doc %s (source: %s)\n", docID[:min(8, len(docID))], source)
+						fmt.Printf("   📄 Processing doc %s (source: %s)\n", docCtx.DocID[:min(8, len(docCtx.DocID))], docCtx.Source)
 					}
-					err := org.ExtractDecisionsForDoc(ctx, docID, docsSvc, geminiClient, dryRun)
+					err := org.ExtractDecisionsForDoc(ctx, docCtx, docsSvc, geminiClient, decisionExporter, dryRun)
 					if err != nil {
-						fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
+						fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docCtx.DocID[:min(8, len(docCtx.DocID))], err)
 						totalFailed++
 					}
 				}

@@ -41,6 +41,7 @@ var configShowCmd = &cobra.Command{
 		fmt.Printf("   Gemini Model:      %s\n", cfg.GeminiModel)
 		fmt.Printf("   Gemini API Key:    %s\n", maskSecret(cfg.GeminiAPIKey))
 		fmt.Printf("   Credentials File:  %s\n", cfg.CredentialsFile)
+		fmt.Printf("   Decisions Export:  %s\n", cfg.DecisionsExportDir)
 		fmt.Printf("   Secret storage:    %s\n", backend)
 		fmt.Println("───────────────────────────────────────────────────────────")
 
