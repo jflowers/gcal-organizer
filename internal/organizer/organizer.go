@@ -50,20 +50,22 @@ type GeminiService interface {
 
 // Stats tracks operation counts for summary reporting.
 type Stats struct {
-	DocumentsFound     int
-	DocumentsMoved     int
-	ShortcutsCreated   int
-	ShortcutsTrashed   int
-	EventsProcessed    int
-	EventsWithAttach   int
-	AttachmentsShared  int
-	TasksAssigned      int
-	TasksFailed        int
-	DecisionsProcessed int
-	DecisionsSkipped   int
-	DecisionsFailed    int
-	Skipped            int
-	Errors             int
+	DocumentsFound        int
+	DocumentsMoved        int
+	ShortcutsCreated      int
+	ShortcutsTrashed      int
+	EventsProcessed       int
+	EventsWithAttach      int
+	AttachmentsShared     int
+	TasksAssigned         int
+	TasksFailed           int
+	DecisionsProcessed    int
+	DecisionsSkipped      int
+	DecisionsFailed       int
+	DecisionsExported     int
+	DecisionsExportFailed int
+	Skipped               int
+	Errors                int
 }
 
 // Organizer orchestrates all the services.
@@ -73,20 +75,20 @@ type Organizer struct {
 	calendar CalendarService
 	logger   *log.Logger
 
-	stats          Stats
-	notesDocIDs    map[string]bool   // Google Doc IDs with "Notes" attachments
-	decisionDocIDs map[string]string // Google Doc IDs for decision extraction (docID→source)
+	stats               Stats
+	notesDocIDs         map[string]bool                      // Google Doc IDs with "Notes" attachments
+	decisionDocContexts map[string]models.DecisionDocContext // Google Doc IDs for decision extraction (docID→context)
 }
 
 // New creates a new Organizer with all services initialized.
 func New(cfg *config.Config, driveSvc DriveService, calSvc CalendarService) *Organizer {
 	return &Organizer{
-		config:         cfg,
-		drive:          driveSvc,
-		calendar:       calSvc,
-		logger:         logging.Logger,
-		notesDocIDs:    make(map[string]bool),
-		decisionDocIDs: make(map[string]string),
+		config:              cfg,
+		drive:               driveSvc,
+		calendar:            calSvc,
+		logger:              logging.Logger,
+		notesDocIDs:         make(map[string]bool),
+		decisionDocContexts: make(map[string]models.DecisionDocContext),
 	}
 }
 
@@ -99,11 +101,11 @@ func (o *Organizer) GetNotesDocIDs() []string {
 	return ids
 }
 
-// GetDecisionDocIDs returns a copy of the map of Google Doc IDs eligible for decision extraction.
-// Keys are doc IDs, values are the source pattern ("notes-by-gemini" or "transcript").
-func (o *Organizer) GetDecisionDocIDs() map[string]string {
-	result := make(map[string]string, len(o.decisionDocIDs))
-	for k, v := range o.decisionDocIDs {
+// GetDecisionDocContexts returns a copy of the map of Google Doc IDs eligible for decision extraction.
+// Keys are doc IDs, values are DecisionDocContext structs carrying event metadata.
+func (o *Organizer) GetDecisionDocContexts() map[string]models.DecisionDocContext {
+	result := make(map[string]models.DecisionDocContext, len(o.decisionDocContexts))
+	for k, v := range o.decisionDocContexts {
 		result[k] = v
 	}
 	return result
@@ -152,10 +154,20 @@ func (o *Organizer) AddDecisionStats(processed, skipped, failed int) {
 	o.stats.DecisionsFailed += failed
 }
 
+// DecisionExporter defines the interface for exporting decisions to local files.
+// Extracted as an interface to allow the organizer to call the exporter without
+// importing the export package directly (avoiding circular dependencies).
+type DecisionExporter interface {
+	Export(ctx context.Context, decisions []models.Decision, meta models.DecisionDocContext, dryRun bool) error
+}
+
 // ExtractDecisionsForDoc orchestrates decision extraction for a single document.
-// It extracts the transcript, calls Gemini for decision extraction, and creates
-// the Decisions tab. Skips on AI failure with a warning (FR-017).
-func (o *Organizer) ExtractDecisionsForDoc(ctx context.Context, docID string, docsSvc DocsService, geminiSvc GeminiService, dryRun bool) error {
+// It extracts the transcript, calls Gemini for decision extraction, creates
+// the Decisions tab, and exports decisions as local markdown. Skips on AI
+// failure with a warning (FR-017). Export failure does not block the pipeline (FR-012).
+func (o *Organizer) ExtractDecisionsForDoc(ctx context.Context, docCtx models.DecisionDocContext, docsSvc DocsService, geminiSvc GeminiService, exporter DecisionExporter, dryRun bool) error {
+	docID := docCtx.DocID
+
 	// Check for existing Decisions tab (idempotency — FR-005)
 	hasTab, err := docsSvc.HasDecisionsTab(ctx, docID)
 	if err != nil {
@@ -185,6 +197,10 @@ func (o *Organizer) ExtractDecisionsForDoc(ctx context.Context, docID string, do
 			"transcript_chars", len(transcript.FullText),
 			"headings", len(transcript.Headings),
 		)
+		// Delegate dry-run export logging to the exporter (FR-011)
+		if exporter != nil {
+			_ = exporter.Export(ctx, []models.Decision{{Category: "made", Text: "placeholder"}}, docCtx, true)
+		}
 		o.stats.DecisionsProcessed++
 		return nil
 	}
@@ -219,6 +235,19 @@ func (o *Organizer) ExtractDecisionsForDoc(ctx context.Context, docID string, do
 		return fmt.Errorf("create decisions tab: %w", err)
 	}
 
+	// Export decisions as local markdown (FR-012: failure must not block pipeline)
+	if exporter != nil && len(decisions) > 0 {
+		if exportErr := exporter.Export(ctx, decisions, docCtx, false); exportErr != nil {
+			o.logger.Warn("Decision markdown export failed",
+				"docID", docID,
+				"error", exportErr,
+			)
+			o.stats.DecisionsExportFailed++
+		} else {
+			o.stats.DecisionsExported++
+		}
+	}
+
 	o.stats.DecisionsProcessed++
 	return nil
 }
@@ -235,6 +264,9 @@ func (o *Organizer) printSummary() {
 		)
 		if o.stats.DecisionsProcessed > 0 {
 			o.logger.Info("Would extract decisions", "documents", o.stats.DecisionsProcessed)
+		}
+		if o.stats.DecisionsExported > 0 {
+			o.logger.Info("Would export decisions", "count", o.stats.DecisionsExported)
 		}
 		if o.stats.Skipped > 0 {
 			o.logger.Info("Would skip non-owned files (--owned-only active)", "count", o.stats.Skipped)
@@ -254,6 +286,12 @@ func (o *Organizer) printSummary() {
 				"processed", o.stats.DecisionsProcessed,
 				"skipped", o.stats.DecisionsSkipped,
 				"failed", o.stats.DecisionsFailed,
+			)
+		}
+		if o.stats.DecisionsExported > 0 || o.stats.DecisionsExportFailed > 0 {
+			o.logger.Info("Decision export",
+				"decisions_exported", o.stats.DecisionsExported,
+				"decisions_export_failed", o.stats.DecisionsExportFailed,
 			)
 		}
 		if o.stats.ShortcutsTrashed > 0 {
@@ -447,7 +485,22 @@ func (o *Organizer) SyncCalendarAttachments(ctx context.Context) error {
 				}
 			}
 			if eventDecisionDocID != "" {
-				o.decisionDocIDs[eventDecisionDocID] = eventDecisionSource
+				// Build attendee list, filtering out self and resource addresses
+				var attendees []string
+				for _, att := range event.Attendees {
+					if att.IsSelf || att.Email == "" || isCalendarResource(att.Email) {
+						continue
+					}
+					attendees = append(attendees, att.Email)
+				}
+
+				o.decisionDocContexts[eventDecisionDocID] = models.DecisionDocContext{
+					DocID:      eventDecisionDocID,
+					Source:     eventDecisionSource,
+					EventTitle: event.Title,
+					EventDate:  event.Start,
+					Attendees:  attendees,
+				}
 			}
 		}
 
