@@ -13,12 +13,45 @@ This guide walks you through setting up `gcal-organizer` with Google Cloud crede
 - **Go 1.24** or later
 - **Node.js 18+** and npm (for browser-based task assignment)
 - **Google Chrome** (for task assignment via Playwright)
+- **Ollama** (for local AI features — sensitivity gate, local task assignment)
 - A Google account with access to:
   - Google Drive
   - Google Calendar
   - Google Docs
   - Google Tasks
 - A Google Cloud project with billing enabled (for Gemini API)
+
+### Ollama (Local AI)
+
+gcal-organizer uses [Ollama](https://ollama.com/) with IBM Granite models for local AI features:
+- **Sensitivity gate**: Screens transcripts for sensitive content before cloud processing
+- **Local task assignment**: Extracts assignees from action items locally
+- **Local-only mode**: Runs all AI processing locally (no cloud AI calls)
+
+**Install Ollama:**
+
+```bash
+# macOS
+brew install ollama
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+**Pull required models:**
+
+```bash
+ollama pull granite-guardian    # Sensitivity classification
+ollama pull granite3.2:8b       # Task assignment and decision extraction
+```
+
+**Start the Ollama service:**
+
+```bash
+ollama serve
+```
+
+> **Note**: If you don't want to use local AI features, set `ollama.enabled: false` in your `config.yaml`. All Ollama checks and features will be skipped.
 
 ---
 
@@ -251,8 +284,10 @@ rm ~/.gcal-organizer/token.json
 
 ## Data Privacy
 
-- **What goes to Gemini AI**: Only the text of individual checkbox items (e.g., `"@jordan review the API spec by Friday"`). Full document contents are **never** uploaded.
-- **What stays local**: OAuth tokens, API keys, and client credentials are stored in the OS credential store (macOS Keychain / Linux Secret Service) by default. Non-secret configuration remains in `~/.gcal-organizer/.env`. Nothing is transmitted externally.
+- **Sensitivity gate**: When enabled (default), every transcript is screened locally by Granite Guardian before any cloud processing. Sensitive transcripts (HR, legal, financial, health, termination) are skipped entirely — no cloud AI calls, no document modifications.
+- **What goes to Gemini AI**: Only decision extraction uses Gemini (unless local-only mode is enabled). Task assignment runs locally via Ollama.
+- **Local-only mode**: Set `ollama.local_only: true` to prevent all cloud AI calls. All processing runs through local Granite models.
+- **What stays local**: OAuth tokens, API keys, and client credentials are stored in the OS credential store (macOS Keychain / Linux Secret Service) by default. Configuration remains in `~/.gcal-organizer/config.yaml`.
 - **Scopes are minimal**: The app requests only the scopes it needs (see table above).
 - **Offline access**: The token includes refresh capability for long-running use.
 

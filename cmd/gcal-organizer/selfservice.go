@@ -16,6 +16,8 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/jflowers/gcal-organizer/internal/config"
+	"github.com/jflowers/gcal-organizer/internal/ollama"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -346,6 +348,63 @@ var doctorCmd = &cobra.Command{
 			warned++
 		}
 
+		// 11-14. Ollama checks (FR-027: skip when disabled)
+		cfg, _, _, cfgErr := loadConfigAndStore()
+		if cfgErr != nil {
+			// If config load fails, try defaults
+			cfg = config.DefaultConfig()
+		}
+
+		if cfg.Ollama.Enabled {
+			// Check 11: Ollama binary installed
+			if _, lookErr := exec.LookPath("ollama"); lookErr == nil {
+				fmt.Println(styledPass("Ollama binary installed"))
+				passed++
+			} else {
+				fmt.Println(styledFail("Ollama binary not found"))
+				fmt.Println(styledFix("Install: brew install ollama"))
+				failed++
+			}
+
+			// Check 12: Ollama service running
+			ollamaClient := ollama.NewClient(cfg.Ollama.Endpoint, 5)
+			ollamaRunning := ollamaClient.HealthCheck()
+			if ollamaRunning {
+				fmt.Println(styledPass("Ollama service running"))
+				passed++
+			} else {
+				fmt.Println(styledFail("Ollama service not running"))
+				fmt.Println(styledFix("Run: ollama serve"))
+				failed++
+			}
+
+			// Checks 13-14: Model availability (only if service is running)
+			if ollamaRunning {
+				// Check 13: Sensitivity model
+				if ollamaClient.ModelAvailable(cfg.Ollama.Sensitivity.Model) {
+					fmt.Println(styledPass(fmt.Sprintf("Sensitivity model (%s) available", cfg.Ollama.Sensitivity.Model)))
+					passed++
+				} else {
+					fmt.Println(styledFail(fmt.Sprintf("Sensitivity model (%s) not found", cfg.Ollama.Sensitivity.Model)))
+					fmt.Println(styledFix(fmt.Sprintf("Run: ollama pull %s", cfg.Ollama.Sensitivity.Model)))
+					failed++
+				}
+
+				// Check 14: Assignment model
+				if ollamaClient.ModelAvailable(cfg.Ollama.Assignments.Model) {
+					fmt.Println(styledPass(fmt.Sprintf("Assignment model (%s) available", cfg.Ollama.Assignments.Model)))
+					passed++
+				} else {
+					fmt.Println(styledFail(fmt.Sprintf("Assignment model (%s) not found", cfg.Ollama.Assignments.Model)))
+					fmt.Println(styledFix(fmt.Sprintf("Run: ollama pull %s", cfg.Ollama.Assignments.Model)))
+					failed++
+				}
+			} else {
+				fmt.Println(styledWarn("Model checks skipped — Ollama not running"))
+				warned++
+			}
+		}
+
 		// Summary
 		fmt.Println()
 		summaryLine := fmt.Sprintf("  ✅ %d passed  ⚠️  %d warnings  ❌ %d failed", passed, warned, failed)
@@ -446,6 +505,56 @@ var initCmd = &cobra.Command{
 			fmt.Println(styledFix("Download OAuth credentials from Google Cloud Console:"))
 			fmt.Println(subtleStyle.Render("     https://console.cloud.google.com/apis/credentials"))
 			fmt.Println(subtleStyle.Render("     Save as: ~/.gcal-organizer/credentials.json"))
+		}
+
+		// 4. Ollama model pull prompt (FR-028)
+		cfg := config.DefaultConfig()
+		// Try to load actual config if available.
+		if loadedCfg, loadErr := config.Load(); loadErr == nil {
+			cfg = loadedCfg
+		}
+		if cfg.Ollama.Enabled {
+			ollamaClient := ollama.NewClient(cfg.Ollama.Endpoint, 5)
+			if ollamaClient.HealthCheck() {
+				var missingModels []string
+				if !ollamaClient.ModelAvailable(cfg.Ollama.Sensitivity.Model) {
+					missingModels = append(missingModels, cfg.Ollama.Sensitivity.Model)
+				}
+				if !ollamaClient.ModelAvailable(cfg.Ollama.Assignments.Model) {
+					missingModels = append(missingModels, cfg.Ollama.Assignments.Model)
+				}
+
+				if len(missingModels) > 0 && !nonInteractive {
+					var pullConfirm bool
+					form := huh.NewForm(
+						huh.NewGroup(
+							huh.NewConfirm().
+								Title("Local AI models are needed for transcript screening. Pull them now?").
+								Affirmative("Yes").
+								Negative("No").
+								Value(&pullConfirm),
+						),
+					)
+					if err := form.Run(); err == nil && pullConfirm {
+						for _, model := range missingModels {
+							fmt.Printf("   Pulling %s...\n", model)
+							pullCmd := exec.Command("ollama", "pull", model)
+							pullCmd.Stdout = os.Stdout
+							pullCmd.Stderr = os.Stderr
+							if err := pullCmd.Run(); err != nil {
+								fmt.Println(styledWarn(fmt.Sprintf("Failed to pull %s: %v", model, err)))
+							} else {
+								fmt.Println(styledPass(fmt.Sprintf("Pulled %s", model)))
+							}
+						}
+					}
+				} else if len(missingModels) > 0 && nonInteractive {
+					fmt.Println(styledWarn(fmt.Sprintf("Missing Ollama models: %v", missingModels)))
+					fmt.Println(styledFix("Run: ollama pull <model> for each missing model"))
+				} else {
+					fmt.Println(styledPass("All Ollama models available"))
+				}
+			}
 		}
 
 		fmt.Println()
@@ -716,7 +825,42 @@ func generateConfigYAML() string {
 	b.WriteString("  # meetings:\n")
 	b.WriteString("  #   - \"Sprint Planning\"\n")
 	b.WriteString("  #   - \"Design Review\"\n")
-	b.WriteString("  #   - \"Weekly Sync\"\n")
+	b.WriteString("  #   - \"Weekly Sync\"\n\n")
+
+	b.WriteString("# Local AI configuration (Ollama with IBM Granite models)\n")
+	b.WriteString("ollama:\n")
+	b.WriteString("  # Enable local AI features (sensitivity gate, local task assignment)\n")
+	b.WriteString("  # When disabled, all Ollama checks and features are skipped.\n")
+	b.WriteString("  # Default: true\n")
+	b.WriteString("  enabled: true\n\n")
+	b.WriteString("  # Ollama API endpoint\n")
+	b.WriteString("  # Default: http://localhost:11434\n")
+	b.WriteString("  endpoint: \"http://localhost:11434\"\n\n")
+	b.WriteString("  # Request timeout for generation requests (seconds)\n")
+	b.WriteString("  # Default: 120\n")
+	b.WriteString("  timeout: 120\n\n")
+	b.WriteString("  # Sensitivity classification settings\n")
+	b.WriteString("  sensitivity:\n")
+	b.WriteString("    # Enable sensitivity gate\n")
+	b.WriteString("    # Default: true\n")
+	b.WriteString("    enabled: true\n\n")
+	b.WriteString("    # Model for sensitivity classification\n")
+	b.WriteString("    # Default: granite-guardian\n")
+	b.WriteString("    model: \"granite-guardian\"\n\n")
+	b.WriteString("    # Sensitivity threshold (0.0-1.0)\n")
+	b.WriteString("    # Transcripts scoring >= this value are skipped.\n")
+	b.WriteString("    # Default: 0.7\n")
+	b.WriteString("    threshold: 0.7\n\n")
+	b.WriteString("  # Task assignment settings\n")
+	b.WriteString("  assignments:\n")
+	b.WriteString("    # Model for assignee extraction\n")
+	b.WriteString("    # Default: granite3.2:8b\n")
+	b.WriteString("    model: \"granite3.2:8b\"\n\n")
+	b.WriteString("  # Local-only mode\n")
+	b.WriteString("  # When true, all AI processing runs locally (no cloud AI calls).\n")
+	b.WriteString("  # Decision extraction uses the local model instead of Gemini.\n")
+	b.WriteString("  # Default: false\n")
+	b.WriteString("  local_only: false\n")
 
 	return b.String()
 }

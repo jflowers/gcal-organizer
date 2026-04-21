@@ -21,6 +21,50 @@ func mustBindEnv(args ...string) {
 	}
 }
 
+// OllamaConfig holds configuration for the local AI integration via Ollama.
+type OllamaConfig struct {
+	// Enabled controls whether local AI features are active.
+	// When false, all Ollama checks and features are skipped.
+	Enabled bool `mapstructure:"enabled"`
+
+	// Endpoint is the Ollama API base URL (e.g., "http://localhost:11434").
+	Endpoint string `mapstructure:"endpoint"`
+
+	// Timeout is the HTTP request timeout for generation requests, in seconds.
+	Timeout int `mapstructure:"timeout"`
+
+	// Sensitivity holds settings for the sensitivity classification gate.
+	Sensitivity SensitivityConfig `mapstructure:"sensitivity"`
+
+	// Assignments holds settings for local task assignment.
+	Assignments AssignmentsConfig `mapstructure:"assignments"`
+
+	// LocalOnly prevents all cloud AI API calls when true.
+	// Decision extraction uses the local model instead of Gemini.
+	LocalOnly bool `mapstructure:"local_only"`
+}
+
+// SensitivityConfig holds settings for the sensitivity classification gate.
+type SensitivityConfig struct {
+	// Enabled controls whether the sensitivity gate is active (FR-006).
+	// Independent of the top-level OllamaConfig.Enabled toggle.
+	// When false, transcripts are not screened for sensitivity.
+	Enabled bool `mapstructure:"enabled"`
+
+	// Model is the Ollama model name for sensitivity classification.
+	Model string `mapstructure:"model"`
+
+	// Threshold is the minimum score for a transcript to be classified
+	// as sensitive. Comparison is >= (inclusive). Range: 0.0–1.0.
+	Threshold float64 `mapstructure:"threshold"`
+}
+
+// AssignmentsConfig holds settings for local task assignment.
+type AssignmentsConfig struct {
+	// Model is the Ollama model name for assignee extraction.
+	Model string `mapstructure:"model"`
+}
+
 // DecisionsConfig holds configuration for the decision export feature.
 type DecisionsConfig struct {
 	// ExportDir is the output directory for decision markdown files.
@@ -76,6 +120,9 @@ type Config struct {
 
 	// Decisions holds configuration for the decision export feature.
 	Decisions DecisionsConfig `mapstructure:"decisions"`
+
+	// Ollama holds configuration for the local AI integration.
+	Ollama OllamaConfig `mapstructure:"ollama"`
 }
 
 // DefaultConfig returns a Config with default values.
@@ -95,6 +142,20 @@ func DefaultConfig() *Config {
 		ChromeProfilePath: filepath.Join(configDir, "chrome-data"),
 		Decisions: DecisionsConfig{
 			ExportDir: filepath.Join(configDir, "decisions"),
+		},
+		Ollama: OllamaConfig{
+			Enabled:  true,
+			Endpoint: "http://localhost:11434",
+			Timeout:  120,
+			Sensitivity: SensitivityConfig{
+				Enabled:   true,
+				Model:     "granite-guardian",
+				Threshold: 0.7,
+			},
+			Assignments: AssignmentsConfig{
+				Model: "granite3.2:8b",
+			},
+			LocalOnly: false,
 		},
 	}
 }
@@ -120,6 +181,14 @@ func Load() (*Config, error) {
 	mustBindEnv("no-keyring", "GCAL_NO_KEYRING")
 	mustBindEnv("decisions.export_dir", "GCAL_DECISIONS_EXPORT_DIR")
 	mustBindEnv("decisions.meetings", "GCAL_DECISIONS_MEETINGS")
+	mustBindEnv("ollama.enabled", "GCAL_OLLAMA_ENABLED")
+	mustBindEnv("ollama.endpoint", "GCAL_OLLAMA_ENDPOINT")
+	mustBindEnv("ollama.timeout", "GCAL_OLLAMA_TIMEOUT")
+	mustBindEnv("ollama.sensitivity.enabled", "GCAL_OLLAMA_SENSITIVITY_ENABLED")
+	mustBindEnv("ollama.sensitivity.model", "GCAL_OLLAMA_SENSITIVITY_MODEL")
+	mustBindEnv("ollama.sensitivity.threshold", "GCAL_OLLAMA_SENSITIVITY_THRESHOLD")
+	mustBindEnv("ollama.assignments.model", "GCAL_OLLAMA_ASSIGNMENTS_MODEL")
+	mustBindEnv("ollama.local_only", "GCAL_OLLAMA_LOCAL_ONLY")
 
 	// Override defaults with viper values
 	if v := viper.GetString("master_folder_name"); v != "" {
@@ -160,6 +229,34 @@ func Load() (*Config, error) {
 		cfg.Decisions.Meetings = meetings
 	}
 
+	// Ollama configuration overrides from viper (YAML or env vars).
+	// viper.IsSet checks whether a key was explicitly provided (YAML or env),
+	// avoiding overwriting defaults with zero values.
+	if viper.IsSet("ollama.enabled") {
+		cfg.Ollama.Enabled = viper.GetBool("ollama.enabled")
+	}
+	if v := viper.GetString("ollama.endpoint"); v != "" {
+		cfg.Ollama.Endpoint = v
+	}
+	if viper.IsSet("ollama.timeout") {
+		cfg.Ollama.Timeout = viper.GetInt("ollama.timeout")
+	}
+	if viper.IsSet("ollama.sensitivity.enabled") {
+		cfg.Ollama.Sensitivity.Enabled = viper.GetBool("ollama.sensitivity.enabled")
+	}
+	if v := viper.GetString("ollama.sensitivity.model"); v != "" {
+		cfg.Ollama.Sensitivity.Model = v
+	}
+	if viper.IsSet("ollama.sensitivity.threshold") {
+		cfg.Ollama.Sensitivity.Threshold = viper.GetFloat64("ollama.sensitivity.threshold")
+	}
+	if v := viper.GetString("ollama.assignments.model"); v != "" {
+		cfg.Ollama.Assignments.Model = v
+	}
+	if viper.IsSet("ollama.local_only") {
+		cfg.Ollama.LocalOnly = viper.GetBool("ollama.local_only")
+	}
+
 	cfg.Verbose = viper.GetBool("verbose")
 	cfg.DryRun = viper.GetBool("dry-run")
 	cfg.OwnedOnly = viper.GetBool("owned-only")
@@ -189,7 +286,13 @@ func (c *Config) LoadSecrets(store secrets.SecretStore) {
 }
 
 // Validate checks that required configuration values are set.
+// FR-016: When Ollama.LocalOnly is true, GeminiAPIKey is NOT required
+// because all AI processing runs locally.
 func (c *Config) Validate() error {
+	if c.Ollama.Enabled && c.Ollama.LocalOnly {
+		// Local-only mode: Gemini key is optional (FR-016).
+		return nil
+	}
 	if c.GeminiAPIKey == "" {
 		return ux.MissingAPIKey()
 	}
