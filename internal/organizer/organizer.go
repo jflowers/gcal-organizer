@@ -12,6 +12,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/docs"
 	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/logging"
+	"github.com/jflowers/gcal-organizer/internal/ollama"
 	"github.com/jflowers/gcal-organizer/pkg/models"
 )
 
@@ -66,6 +67,12 @@ type Stats struct {
 	DecisionsExportFailed int
 	Skipped               int
 	Errors                int
+
+	// SensitivitySkipped counts transcripts skipped due to sensitivity classification.
+	SensitivitySkipped int
+
+	// SensitivityProcessed counts transcripts that passed the sensitivity gate.
+	SensitivityProcessed int
 }
 
 // Organizer orchestrates all the services.
@@ -78,6 +85,10 @@ type Organizer struct {
 	stats               Stats
 	notesDocIDs         map[string]bool                      // Google Doc IDs with "Notes" attachments
 	decisionDocContexts map[string]models.DecisionDocContext // Google Doc IDs for decision extraction (docID→context)
+
+	// sensitivityClassifier is the optional sensitivity gate.
+	// When non-nil, every transcript is classified before processing.
+	sensitivityClassifier ollama.SensitivityClassifier
 }
 
 // New creates a new Organizer with all services initialized.
@@ -90,6 +101,36 @@ func New(cfg *config.Config, driveSvc DriveService, calSvc CalendarService) *Org
 		notesDocIDs:         make(map[string]bool),
 		decisionDocContexts: make(map[string]models.DecisionDocContext),
 	}
+}
+
+// SetSensitivityClassifier sets the optional sensitivity classifier for the
+// organizer pipeline. When set, every transcript is classified before processing.
+func (o *Organizer) SetSensitivityClassifier(classifier ollama.SensitivityClassifier) {
+	o.sensitivityClassifier = classifier
+}
+
+// ClassifyTranscript extracts the transcript from a document and runs the
+// sensitivity classifier. Returns the result or an error. Returns nil result
+// if no classifier is set or the transcript is empty.
+func (o *Organizer) ClassifyTranscript(ctx context.Context, docCtx models.DecisionDocContext, docsSvc DocsService) (*models.SensitivityResult, error) {
+	if o.sensitivityClassifier == nil {
+		return nil, nil
+	}
+
+	transcript, err := docsSvc.ExtractTranscriptContent(ctx, docCtx.DocID)
+	if err != nil {
+		return nil, fmt.Errorf("extract transcript for sensitivity check: %w", err)
+	}
+	if transcript == nil || transcript.FullText == "" {
+		return nil, nil
+	}
+
+	result, err := o.sensitivityClassifier.Classify(ctx, transcript.FullText)
+	if err != nil {
+		return nil, fmt.Errorf("sensitivity classification: %w", err)
+	}
+
+	return result, nil
 }
 
 // GetNotesDocIDs returns the list of Google Doc IDs with "Notes" attachments.
@@ -145,6 +186,16 @@ func (o *Organizer) PrintSummary() {
 func (o *Organizer) AddTaskStats(assigned, failed int) {
 	o.stats.TasksAssigned += assigned
 	o.stats.TasksFailed += failed
+}
+
+// AddSensitivitySkipped increments the sensitivity skipped counter.
+func (o *Organizer) AddSensitivitySkipped() {
+	o.stats.SensitivitySkipped++
+}
+
+// AddSensitivityProcessed increments the sensitivity processed counter.
+func (o *Organizer) AddSensitivityProcessed() {
+	o.stats.SensitivityProcessed++
 }
 
 // AddDecisionStats updates the decision extraction statistics.
@@ -262,6 +313,12 @@ func (o *Organizer) printSummary() {
 			"events_processed", o.stats.EventsProcessed,
 			"tasks_assigned", o.stats.TasksAssigned,
 		)
+		if o.stats.SensitivitySkipped > 0 || o.stats.SensitivityProcessed > 0 {
+			o.logger.Info("Sensitivity gate",
+				"processed", o.stats.SensitivityProcessed,
+				"skipped", o.stats.SensitivitySkipped,
+			)
+		}
 		if o.stats.DecisionsProcessed > 0 {
 			o.logger.Info("Would extract decisions", "documents", o.stats.DecisionsProcessed)
 		}
@@ -281,6 +338,12 @@ func (o *Organizer) printSummary() {
 			"events_with_attachments", o.stats.EventsWithAttach,
 			"tasks_assigned", o.stats.TasksAssigned,
 		)
+		if o.stats.SensitivitySkipped > 0 || o.stats.SensitivityProcessed > 0 {
+			o.logger.Info("Sensitivity gate",
+				"processed", o.stats.SensitivityProcessed,
+				"skipped", o.stats.SensitivitySkipped,
+			)
+		}
 		if o.stats.DecisionsProcessed > 0 || o.stats.DecisionsSkipped > 0 || o.stats.DecisionsFailed > 0 {
 			o.logger.Info("Decision extraction",
 				"processed", o.stats.DecisionsProcessed,

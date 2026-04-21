@@ -16,6 +16,9 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"net/url"
+	"strings"
+
 	"github.com/charmbracelet/huh"
 	"github.com/jflowers/gcal-organizer/internal/auth"
 	"github.com/jflowers/gcal-organizer/internal/calendar"
@@ -23,6 +26,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/drive"
 	"github.com/jflowers/gcal-organizer/internal/export"
 	"github.com/jflowers/gcal-organizer/internal/logging"
+	"github.com/jflowers/gcal-organizer/internal/ollama"
 	"github.com/jflowers/gcal-organizer/internal/organizer"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/jflowers/gcal-organizer/internal/ux"
@@ -188,6 +192,44 @@ var runCmd = &cobra.Command{
 			return err
 		}
 
+		// Initialize Ollama client and sensitivity gate when enabled.
+		var ollamaClient *ollama.Client
+		if cfg.Ollama.Enabled {
+			ollamaClient = ollama.NewClient(cfg.Ollama.Endpoint, cfg.Ollama.Timeout)
+
+			// S-1: Warn when Ollama endpoint is not localhost.
+			if !isLocalEndpoint(cfg.Ollama.Endpoint) {
+				logging.Logger.Warn("Ollama endpoint is not localhost — sensitive transcripts will be sent over the network",
+					"endpoint", cfg.Ollama.Endpoint)
+			}
+
+			// FR-008: Hard-stop when Ollama configured but unavailable.
+			if !ollamaClient.HealthCheck() {
+				return fmt.Errorf("Ollama is configured but not available at %s\n\n"+
+					"Fix steps:\n"+
+					"  1. Install: brew install ollama\n"+
+					"  2. Start:   ollama serve\n"+
+					"  3. Verify:  ollama list\n\n"+
+					"Or disable: set ollama.enabled=false in config.yaml", cfg.Ollama.Endpoint)
+			}
+
+			// FR-010: Validate sensitivity model availability.
+			if cfg.Ollama.Sensitivity.Enabled {
+				if !ollamaClient.ModelAvailable(cfg.Ollama.Sensitivity.Model) {
+					return fmt.Errorf("Ollama sensitivity model %q is not available\n\n"+
+						"Fix: ollama pull %s", cfg.Ollama.Sensitivity.Model, cfg.Ollama.Sensitivity.Model)
+				}
+				guardian := ollama.NewGuardian(ollamaClient, cfg.Ollama.Sensitivity.Model)
+				org.SetSensitivityClassifier(guardian)
+			}
+
+			// Validate assignment model availability.
+			if !ollamaClient.ModelAvailable(cfg.Ollama.Assignments.Model) {
+				return fmt.Errorf("Ollama assignment model %q is not available\n\n"+
+					"Fix: ollama pull %s", cfg.Ollama.Assignments.Model, cfg.Ollama.Assignments.Model)
+			}
+		}
+
 		// Steps 1 & 2: Organize documents + Sync calendar
 		if err := org.RunFullWorkflow(ctx); err != nil {
 			return err
@@ -203,17 +245,26 @@ var runCmd = &cobra.Command{
 			fmt.Println("───────────────────────────────────────────────────────────")
 			fmt.Printf("   Found %d Notes documents to scan for tasks\n", len(docIDs))
 
-			// Initialize Docs+Gemini once for all documents to avoid
-			// redundant OAuth/Gemini client creation per document.
+			// Initialize Docs service and assignee extractor.
+			// When Ollama is enabled, use local assigner (FR-013).
+			// Otherwise, use Gemini.
 			taskDocsSvc, taskGeminiClient, taskInitErr := initDocsAndGemini(ctx, cfg, store)
 			if taskInitErr != nil {
 				fmt.Printf("   ⚠️  Error initializing services for Step 3: %v\n", taskInitErr)
 			} else {
+				var extractor AssigneeExtractor
+				if cfg.Ollama.Enabled && ollamaClient != nil {
+					extractor = ollama.NewAssigner(ollamaClient, cfg.Ollama.Assignments.Model)
+					logging.Logger.Info("Using local AI for task assignment", "model", cfg.Ollama.Assignments.Model)
+				} else {
+					extractor = taskGeminiClient
+				}
+
 				totalAssigned := 0
 				totalFailed := 0
 
 				for _, docID := range docIDs {
-					assigned, failed, err := runAssignTasksForDoc(ctx, cfg, taskDocsSvc, taskGeminiClient, docID)
+					assigned, failed, err := runAssignTasksForDoc(ctx, cfg, taskDocsSvc, extractor, docID)
 					if err != nil {
 						fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docID[:min(8, len(docID))], err)
 						continue
@@ -244,14 +295,47 @@ var runCmd = &cobra.Command{
 				fmt.Printf("   Found %d transcript documents to process\n", len(decisionDocContexts))
 			}
 
+			// FR-016: local-only mode requires Ollama enabled.
+			if cfg.Ollama.LocalOnly && !cfg.Ollama.Enabled {
+				return fmt.Errorf("local-only mode requires Ollama to be enabled\n\n" +
+					"Fix: set ollama.enabled=true in config.yaml, or disable local_only")
+			}
+
 			// Create decision exporter with configured output directory
 			decisionExporter := export.NewExporter(cfg.Decisions.ExportDir, logging.Logger)
 
-			// Initialize services once for all documents
+			// Initialize services once for all documents.
+			// When local-only mode is active, use local decision extractor
+			// instead of Gemini (FR-016, FR-017).
+			var geminiSvc organizer.GeminiService
 			docsSvc, geminiClient, initErr := initDocsAndGemini(ctx, cfg, store)
 			if initErr != nil {
-				fmt.Printf("   ⚠️  Error initializing services for Step 4: %v\n", initErr)
-			} else {
+				// In local-only mode, Gemini init failure is not fatal for decisions.
+				// We still need docsSvc for transcript extraction and tab creation.
+				if cfg.Ollama.Enabled && cfg.Ollama.LocalOnly && ollamaClient != nil {
+					if docsSvc == nil {
+						// initDocsAndGemini may have returned docsSvc even on Gemini failure,
+						// but if OAuth/Docs also failed, try docs-only initialization.
+						var docsErr error
+						docsSvc, docsErr = initDocsOnly(ctx, cfg, store)
+						if docsErr != nil {
+							fmt.Printf("   ⚠️  Error initializing Docs service for Step 4: %v\n", docsErr)
+						}
+					}
+					logging.Logger.Debug("Gemini init skipped, using local-only mode for decisions", "error", initErr)
+				} else {
+					fmt.Printf("   ⚠️  Error initializing services for Step 4: %v\n", initErr)
+				}
+			}
+
+			if cfg.Ollama.Enabled && cfg.Ollama.LocalOnly && ollamaClient != nil {
+				geminiSvc = ollama.NewDecisionExtractor(ollamaClient, cfg.Ollama.Assignments.Model)
+				logging.Logger.Info("Using local AI for decision extraction", "model", cfg.Ollama.Assignments.Model)
+			} else if geminiClient != nil {
+				geminiSvc = geminiClient
+			}
+
+			if docsSvc != nil && geminiSvc != nil {
 				totalFailed := 0
 
 				for _, docCtx := range decisionDocContexts {
@@ -260,10 +344,52 @@ var runCmd = &cobra.Command{
 						logging.Logger.Debug("Skipping meeting not in allowlist", "title", docCtx.EventTitle)
 						continue
 					}
+
+					// Sensitivity gate: classify transcript before processing (FR-001).
+					// Inserted here (same level as allowlist filter) to keep
+					// ExtractDecisionsForDoc focused on extraction, not gating.
+					if cfg.Ollama.Enabled && cfg.Ollama.Sensitivity.Enabled {
+						sensitivityResult, classifyErr := org.ClassifyTranscript(ctx, docCtx, docsSvc)
+						if classifyErr != nil {
+							// Hard-stop on classification failure (FR-009).
+							return fmt.Errorf("sensitivity classification failed for doc %s: %w",
+								docCtx.DocID[:min(8, len(docCtx.DocID))], classifyErr)
+						}
+						if sensitivityResult != nil {
+							docURL := fmt.Sprintf("https://docs.google.com/document/d/%s/edit", docCtx.DocID)
+							if sensitivityResult.Score >= cfg.Ollama.Sensitivity.Threshold {
+								// FR-004: Log category+score+doc URL at INFO.
+								logging.Logger.Info("Skipped sensitive transcript",
+									"category", sensitivityResult.Category,
+									"score", sensitivityResult.Score,
+									"doc", docURL,
+								)
+								// FR-004: Reasoning at DEBUG only.
+								logging.Logger.Debug("Sensitivity reasoning",
+									"reasoning", sensitivityResult.Reasoning,
+								)
+								org.AddSensitivitySkipped()
+								if !dryRun {
+									// FR-007: In dry-run, log but proceed.
+									continue
+								}
+								// FR-007: Dry-run proceeds with processing.
+								logging.Logger.Info("Dry-run: would skip sensitive transcript, but proceeding")
+							} else {
+								org.AddSensitivityProcessed()
+								logging.Logger.Debug("Transcript passed sensitivity gate",
+									"category", sensitivityResult.Category,
+									"score", sensitivityResult.Score,
+									"doc", docURL,
+								)
+							}
+						}
+					}
+
 					if !dryRun {
 						fmt.Printf("   📄 Processing doc %s (source: %s)\n", docCtx.DocID[:min(8, len(docCtx.DocID))], docCtx.Source)
 					}
-					err := org.ExtractDecisionsForDoc(ctx, docCtx, docsSvc, geminiClient, decisionExporter, dryRun)
+					err := org.ExtractDecisionsForDoc(ctx, docCtx, docsSvc, geminiSvc, decisionExporter, dryRun)
 					if err != nil {
 						fmt.Printf("   ⚠️  Error processing doc %s: %v\n", docCtx.DocID[:min(8, len(docCtx.DocID))], err)
 						totalFailed++
@@ -273,7 +399,7 @@ var runCmd = &cobra.Command{
 				// Only add externally-tracked failures; processed/skipped counts are
 				// managed internally by ExtractDecisionsForDoc via organizer stats.
 				org.AddDecisionStats(0, 0, totalFailed)
-			}
+			} // end if docsSvc != nil && geminiSvc != nil
 			fmt.Println()
 		}
 
@@ -473,6 +599,18 @@ func initConfig() {
 
 // loadDotEnv, validEnvKey, maskSecret, and truncateText have been extracted
 // to internal/config/dotenv.go and internal/ux/format.go respectively.
+
+// isLocalEndpoint returns true if the given URL points to localhost.
+// Used for S-1: warn when Ollama endpoint is not localhost.
+func isLocalEndpoint(endpoint string) bool {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1" ||
+		strings.HasPrefix(host, "127.")
+}
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {

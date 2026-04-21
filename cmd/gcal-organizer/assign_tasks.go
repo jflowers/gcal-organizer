@@ -19,6 +19,7 @@ import (
 	"github.com/jflowers/gcal-organizer/internal/gemini"
 	"github.com/jflowers/gcal-organizer/internal/secrets"
 	"github.com/jflowers/gcal-organizer/internal/ux"
+	"github.com/jflowers/gcal-organizer/pkg/models"
 	"github.com/spf13/cobra"
 )
 
@@ -96,51 +97,71 @@ Requires: Node.js and the browser/ directory to be set up.`,
 			return ux.MissingAPIKey()
 		}
 
+		// Use Gemini as the extractor for the standalone assign-tasks command.
+		// The run command handles Ollama substitution separately.
+		var extractor AssigneeExtractor = geminiClient
 		if dryRun {
-			return runAssignTasksDryRunWithServices(ctx, cfg, docsSvc, geminiClient, docID)
+			return runAssignTasksDryRunWithServices(ctx, cfg, docsSvc, extractor, docID)
 		}
-		return runAssignTasksBrowserWithServices(ctx, cfg, docsSvc, geminiClient, docID)
+		return runAssignTasksBrowserWithServices(ctx, cfg, docsSvc, extractor, docID)
 	},
 }
 
 // initDocsAndGemini is a shared helper that initialises the Docs service and
 // Gemini client, both of which are required by every assign-tasks flow.
 func initDocsAndGemini(ctx context.Context, cfg *config.Config, store secrets.SecretStore) (*docs.Service, *gemini.Client, error) {
-	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
+	docsSvc, err := initDocsOnly(ctx, cfg, store)
 	if err != nil {
-		return nil, nil, ux.OAuthSetupFailed(cfg.CredentialsFile)
-	}
-	httpClient, err := oauthClient.GetClient(ctx)
-	if err != nil {
-		return nil, nil, ux.AuthFailed()
-	}
-	docsSvc, err := docs.NewService(ctx, httpClient)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to initialize Docs service: %w\n\nRun 'gcal-organizer doctor' for diagnostics", err)
+		return nil, nil, err
 	}
 	geminiClient, err := gemini.NewClient(ctx, cfg.GeminiAPIKey, cfg.GeminiModel)
 	if err != nil {
-		return nil, nil, ux.MissingAPIKey()
+		return docsSvc, nil, ux.MissingAPIKey()
 	}
 	return docsSvc, geminiClient, nil
 }
 
+// initDocsOnly creates a Docs service without requiring a Gemini API key.
+// Used in local-only mode where Gemini is not needed but Docs API access
+// is still required for transcript extraction and tab creation.
+func initDocsOnly(ctx context.Context, cfg *config.Config, store secrets.SecretStore) (*docs.Service, error) {
+	oauthClient, err := auth.NewOAuthClient(store, cfg.CredentialsFile)
+	if err != nil {
+		return nil, ux.OAuthSetupFailed(cfg.CredentialsFile)
+	}
+	httpClient, err := oauthClient.GetClient(ctx)
+	if err != nil {
+		return nil, ux.AuthFailed()
+	}
+	docsSvc, err := docs.NewService(ctx, httpClient)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize Docs service: %w\n\nRun 'gcal-organizer doctor' for diagnostics", err)
+	}
+	return docsSvc, nil
+}
+
+// AssigneeExtractor is the interface for extracting assignees from checkbox items.
+// Both gemini.Client and ollama.Assigner satisfy this interface.
+type AssigneeExtractor interface {
+	ExtractAssigneesFromCheckboxes(ctx context.Context, items []models.CheckboxItem) ([]models.CheckboxAssignment, error)
+}
+
 // extractUnassignedItems returns the subset of checkbox items that have not
 // yet been assigned (IsProcessed == false).
-func extractUnassignedItems(checkboxes []*docs.CheckboxItem) []gemini.CheckboxItem {
-	var items []gemini.CheckboxItem
+func extractUnassignedItems(checkboxes []*docs.CheckboxItem) []models.CheckboxItem {
+	var items []models.CheckboxItem
 	for i, cb := range checkboxes {
 		if cb.IsProcessed {
 			continue
 		}
-		items = append(items, gemini.CheckboxItem{Index: i, Text: cb.Text})
+		items = append(items, models.CheckboxItem{Index: i, Text: cb.Text})
 	}
 	return items
 }
 
 // runAssignTasksDryRunWithServices analyses a document and prints what would be assigned.
 // Uses pre-initialized services to avoid redundant OAuth/Gemini client creation.
-func runAssignTasksDryRunWithServices(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, geminiClient *gemini.Client, docID string) error {
+func runAssignTasksDryRunWithServices(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, extractor AssigneeExtractor, docID string) error {
 	checkboxes, err := docsSvc.ExtractCheckboxItems(ctx, docID)
 	if err != nil {
 		return fmt.Errorf("failed to extract checkboxes: %w", err)
@@ -158,8 +179,8 @@ func runAssignTasksDryRunWithServices(ctx context.Context, cfg *config.Config, d
 		return nil
 	}
 
-	fmt.Println("🤖 Analyzing tasks with Gemini...")
-	assignments, err := geminiClient.ExtractAssigneesFromCheckboxes(ctx, items)
+	fmt.Println("🤖 Analyzing tasks...")
+	assignments, err := extractor.ExtractAssigneesFromCheckboxes(ctx, items)
 	if err != nil {
 		return fmt.Errorf("failed to extract assignees: %w", err)
 	}
@@ -198,7 +219,7 @@ type scriptOutput struct {
 
 // runAssignTasksBrowserWithServices extracts assignees then invokes the Playwright script.
 // Uses pre-initialized services to avoid redundant OAuth/Gemini client creation.
-func runAssignTasksBrowserWithServices(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, geminiClient *gemini.Client, docID string) error {
+func runAssignTasksBrowserWithServices(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, extractor AssigneeExtractor, docID string) error {
 	checkboxes, err := docsSvc.ExtractCheckboxItems(ctx, docID)
 	if err != nil {
 		return fmt.Errorf("failed to extract checkboxes: %w", err)
@@ -216,8 +237,8 @@ func runAssignTasksBrowserWithServices(ctx context.Context, cfg *config.Config, 
 		return nil
 	}
 
-	fmt.Println("🤖 Analyzing tasks with Gemini...")
-	assignments, err := geminiClient.ExtractAssigneesFromCheckboxes(ctx, items)
+	fmt.Println("🤖 Analyzing tasks...")
+	assignments, err := extractor.ExtractAssigneesFromCheckboxes(ctx, items)
 	if err != nil {
 		return fmt.Errorf("failed to extract assignees: %w", err)
 	}
@@ -232,7 +253,7 @@ func runAssignTasksBrowserWithServices(ctx context.Context, cfg *config.Config, 
 }
 
 // runBrowserScript serialises assignments and invokes the Playwright script.
-func runBrowserScript(ctx context.Context, cfg *config.Config, docID string, assignments []gemini.CheckboxAssignment) error {
+func runBrowserScript(ctx context.Context, cfg *config.Config, docID string, assignments []models.CheckboxAssignment) error {
 	var payload []browserAssignment
 	for _, a := range assignments {
 		email := a.Assignee
@@ -372,9 +393,9 @@ func findBrowserDir() (string, error) {
 
 // runAssignTasksForDoc scans a document for unassigned checkboxes and runs
 // browser automation to assign them. Returns (assigned, failed, error).
-// docsSvc and geminiClient should be pre-initialized by the caller to avoid
-// redundant OAuth/Gemini client creation per document.
-func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, geminiClient *gemini.Client, docID string) (int, int, error) {
+// docsSvc and extractor should be pre-initialized by the caller to avoid
+// redundant client creation per document.
+func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, docsSvc *docs.Service, extractor AssigneeExtractor, docID string) (int, int, error) {
 	checkboxes, err := docsSvc.ExtractCheckboxItems(ctx, docID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("extract checkboxes: %w", err)
@@ -389,9 +410,9 @@ func runAssignTasksForDoc(ctx context.Context, cfg *config.Config, docsSvc *docs
 	}
 
 	fmt.Printf("   📄 Doc %s: %d checkboxes, %d unassigned\n", docID[:min(8, len(docID))], len(checkboxes), len(items))
-	fmt.Println("   🤖 Analyzing tasks with Gemini...")
+	fmt.Println("   🤖 Analyzing tasks...")
 
-	assignments, err := geminiClient.ExtractAssigneesFromCheckboxes(ctx, items)
+	assignments, err := extractor.ExtractAssigneesFromCheckboxes(ctx, items)
 	if err != nil {
 		return 0, 0, fmt.Errorf("extract assignees: %w", err)
 	}

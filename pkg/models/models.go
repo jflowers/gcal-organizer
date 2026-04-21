@@ -143,6 +143,48 @@ type DecisionDocContext struct {
 	Attendees []string
 }
 
+// SensitivityResult is the output of the sensitivity classifier for a single
+// transcript. Contains a binary determination, a category, a confidence score,
+// and a reasoning explanation. The four outputs satisfy FR-002. Reasoning is
+// logged at DEBUG level only (FR-004) to avoid leaking sensitive content into
+// standard log output.
+type SensitivityResult struct {
+	// Sensitive is true when the transcript contains sensitive content
+	// that should not be processed by cloud AI or written to files.
+	Sensitive bool `json:"sensitive"`
+
+	// Category classifies the type of sensitive content detected.
+	// One of: hr, legal, financial, health, termination, none.
+	Category string `json:"category"`
+
+	// Score is the classifier's confidence in the determination (0.0–1.0).
+	// Transcripts with Score >= the configured threshold are treated as sensitive.
+	Score float64 `json:"score"`
+
+	// Reasoning explains why the content was classified as sensitive or not.
+	// Logged at DEBUG level only (FR-004) to avoid leaking sensitive content
+	// into standard log output.
+	Reasoning string `json:"reasoning"`
+}
+
+// CheckboxItem represents a single checkbox action item from a Google Doc.
+// Moved from internal/gemini/client.go to pkg/models so both internal/ollama
+// and internal/gemini can use it without cross-package dependency (review A-1).
+type CheckboxItem struct {
+	Index int    `json:"index"`
+	Text  string `json:"text"`
+}
+
+// CheckboxAssignment is the result of assignee extraction for a checkbox item.
+// Moved from internal/gemini/client.go to pkg/models so both internal/ollama
+// and internal/gemini can use it without cross-package dependency (review A-1).
+type CheckboxAssignment struct {
+	Index    int    `json:"index"`
+	Text     string `json:"text"`
+	Assignee string `json:"assignee"`
+	Email    string `json:"email"` // Populated after name-to-email resolution
+}
+
 // Attendee represents a calendar event attendee.
 type Attendee struct {
 	// Email is the attendee's email address

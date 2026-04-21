@@ -38,19 +38,13 @@ func NewClient(ctx context.Context, apiKey, modelName string) (*Client, error) {
 	}, nil
 }
 
-// CheckboxItem represents a checkbox item from a document with its index.
-type CheckboxItem struct {
-	Index int    `json:"index"`
-	Text  string `json:"text"`
-}
+// CheckboxItem is an alias for models.CheckboxItem for backward compatibility.
+// The canonical type is defined in pkg/models/models.go (review finding A-1).
+type CheckboxItem = models.CheckboxItem
 
-// CheckboxAssignment represents an extracted assignment for a checkbox.
-type CheckboxAssignment struct {
-	Index    int    `json:"index"`
-	Text     string `json:"text"`
-	Assignee string `json:"assignee"`
-	Email    string `json:"email"` // Populated after name-to-email resolution
-}
+// CheckboxAssignment is an alias for models.CheckboxAssignment for backward compatibility.
+// The canonical type is defined in pkg/models/models.go (review finding A-1).
+type CheckboxAssignment = models.CheckboxAssignment
 
 // ExtractAssigneesFromCheckboxes extracts assignee names from multiple checkbox items.
 func (c *Client) ExtractAssigneesFromCheckboxes(ctx context.Context, items []CheckboxItem) ([]CheckboxAssignment, error) {

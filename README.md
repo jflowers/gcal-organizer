@@ -61,6 +61,7 @@ Google Drive
 | **Go 1.24+** | Build the CLI | [go.dev/dl](https://go.dev/dl/) |
 | **Node.js 18+** | Browser automation for task assignment | [nodejs.org](https://nodejs.org/) |
 | **Google Chrome** | Task assignment via Playwright | [google.com/chrome](https://www.google.com/chrome/) |
+| **Ollama** | Local AI for sensitivity gate and task assignment | [ollama.com](https://ollama.com/) |
 | **GCP Project** | OAuth2 credentials + Gemini API key | [Setup Guide](docs/SETUP.md) |
 
 ### Install via Homebrew (macOS & Linux)
@@ -197,9 +198,11 @@ GCAL_DECISIONS_EXPORT_DIR="~/.gcal-organizer/decisions"  # Default
 
 ## 🔒 Data Privacy
 
-**What goes to Gemini AI**: Individual checkbox items for task assignment (e.g., `"@jordan review the API spec by Friday"`) and full transcript text for decision extraction. The tool does *not* upload entire documents for task assignment — it extracts checkbox text via the Google Docs API. For decision extraction (Step 4), the full transcript tab content is sent to Gemini for analysis.
+**Sensitivity gate**: When enabled (default), every transcript is screened locally by Granite Guardian before any cloud processing. Sensitive transcripts are skipped entirely.
 
-**What stays local**: OAuth tokens, credentials, and configuration are stored securely and never transmitted.
+**What goes to Gemini AI**: Only decision extraction uses Gemini (unless local-only mode is enabled). Task assignment runs locally via Ollama. In local-only mode, no data is sent to cloud AI services.
+
+**What stays local**: OAuth tokens, credentials, configuration, and all local AI processing are stored securely and never transmitted to cloud AI services.
 
 ### Secure Credential Storage
 
@@ -251,6 +254,63 @@ Step 4 automatically processes meeting transcript documents to extract and categ
 
 **Error handling**: If Gemini fails on a document, it's skipped with a warning. The next run will retry since no tab was created.
 
+## 🤖 Local AI (Ollama)
+
+gcal-organizer integrates with [Ollama](https://ollama.com/) for local AI processing using IBM Granite models:
+
+### Sensitivity Gate
+
+Every meeting transcript is screened locally by **Granite Guardian** before any cloud processing. If sensitive content is detected (HR discussions, legal matters, compensation, health information, termination planning), the transcript is skipped entirely — no cloud AI calls, no document modifications, no local exports.
+
+```bash
+# View sensitivity classifications in logs
+gcal-organizer run --verbose
+
+# Preview classifications without skipping
+gcal-organizer run --dry-run
+```
+
+### Local Task Assignment
+
+Task assignment (identifying who is responsible for each action item) runs locally using **Granite 3.2:8b** instead of Gemini. Action item content never leaves your machine.
+
+### Local-Only Mode
+
+For maximum privacy, enable local-only mode to run all AI processing locally:
+
+```yaml
+# In ~/.gcal-organizer/config.yaml
+ollama:
+  local_only: true
+```
+
+In this mode, decision extraction also uses the local model instead of Gemini. No cloud AI calls are made.
+
+### Configuration
+
+```yaml
+# ~/.gcal-organizer/config.yaml
+ollama:
+  enabled: true                          # Enable local AI features
+  endpoint: "http://localhost:11434"      # Ollama API endpoint
+  timeout: 120                           # Request timeout (seconds)
+  sensitivity:
+    enabled: true                        # Enable sensitivity gate
+    model: "granite-guardian"             # Sensitivity model
+    threshold: 0.7                       # Sensitivity threshold (0.0-1.0)
+  assignments:
+    model: "granite3.2:8b"               # Task assignment model
+  local_only: false                      # All AI processing local
+```
+
+### Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| "Ollama is configured but not available" | Run `ollama serve` to start the service |
+| "Model not available" | Run `ollama pull <model>` to download the model |
+| "Ollama binary not found" | Install with `brew install ollama` (macOS) |
+
 ## 📁 Project Structure
 
 ```
@@ -264,6 +324,7 @@ gcal-organizer/
 │   ├── drive/                 # Drive folder/file operations
 │   ├── export/                # Decision markdown export (local files)
 │   ├── gemini/                # Gemini AI assignee + decision extraction
+│   ├── ollama/                # Local AI via Ollama (sensitivity, assignments, decisions)
 │   └── organizer/             # Workflow orchestration
 ├── browser/                   # Playwright task assignment script (TypeScript)
 ├── .specify/                  # Spec-kit artifacts
