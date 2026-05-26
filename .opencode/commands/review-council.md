@@ -2,10 +2,6 @@
 description: Run the reviewer governance council to audit codebase or spec compliance.
 ---
 <!-- scaffolded by uf vdev -->
-<!-- scaffolded by uf vdev -->
-<!-- scaffolded by uf vdev -->
-<!-- scaffolded by uf vdev -->
-<!-- scaffolded by uf vv0.6.1 -->
 # Command: /review-council
 
 ## User Input
@@ -55,8 +51,8 @@ examining the current branch and workspace:
      `data-model.md`, `research.md`
    - **Code files**: everything else (`.go`, `.ts`, `.js`,
      `.py`, `go.mod`, `go.sum`, `Makefile`, `internal/`,
-     `cmd/`, `.opencode/agents/`, `.opencode/command/`,
-     `.opencode/skill/`, `.opencode/uf/packs/`,
+     `cmd/`, `.opencode/agents/`, `.opencode/commands/`,
+     `.opencode/skills/`, `.opencode/uf/packs/`,
      etc.)
 
 4. **Detect the workflow tier** from the branch name:
@@ -179,6 +175,18 @@ Review the current codebase for compliance with the Behavioral Constraints in `A
 
 2. Delegate the review to all **discovered** reviewer agents in parallel using the Task tool. For each discovered agent, use the focus area from the Known Reviewer Roles reference table to provide targeted context. For any discovered agent not in the table, use a generic prompt: "Review the current changes for quality, correctness, and compliance. Return your verdict (APPROVE or REQUEST CHANGES) along with all findings."
 
+   **CRITICAL — Review Scope Rule**: The review scope is
+   ALWAYS the **full branch diff** (`git diff main...HEAD`),
+   meaning ALL files changed on the branch relative to
+   `main`. Do NOT narrow the scope to only recent commits,
+   only uncommitted changes, or only files touched in the
+   current session. Every agent MUST be instructed to read
+   and review ALL changed files from the branch diff. The
+   list of changed files from auto-detection step 2 MUST
+   be included in each agent's prompt. Violating this rule
+   produces incomplete reviews that miss findings in
+   earlier commits on the branch.
+
    **When Gaze data is available** (from Phase 1b):
    append a "Quality Context" section to each Divisor
    agent's review prompt containing the Gaze Report
@@ -193,7 +201,7 @@ Review the current codebase for compliance with the Behavioral Constraints in `A
    standard prompt without a "Quality Context"
    section. Agents review based on file reading only.
 
-   For each agent, instruct it to review the current changes and return its verdict (**APPROVE** or **REQUEST CHANGES**) along with all findings.
+   For each agent, instruct it to review the full branch diff (all changed files vs `main`) and return its verdict (**APPROVE** or **REQUEST CHANGES**) along with all findings.
 
 3. Collect all **REQUEST CHANGES** findings from the discovered reviewers. If all discovered reviewers return **APPROVE**, report the result and stop.
 

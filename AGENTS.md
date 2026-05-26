@@ -325,3 +325,17 @@ search only:
 - Use Glob for file pattern matching
 
 <!-- MANUAL ADDITIONS END -->
+
+## Convention Packs
+
+This repository uses convention packs scaffolded by
+unbound-force. Agents MUST read the applicable pack(s)
+before writing or reviewing code.
+
+- `.opencode/uf/packs/default.md`
+- `.opencode/uf/packs/default-custom.md`
+- `.opencode/uf/packs/severity.md`
+- `.opencode/uf/packs/content.md`
+- `.opencode/uf/packs/content-custom.md`
+- `.opencode/uf/packs/go.md`
+- `.opencode/uf/packs/go-custom.md`

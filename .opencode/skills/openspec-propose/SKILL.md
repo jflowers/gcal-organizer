@@ -6,7 +6,7 @@ compatibility: Requires openspec CLI.
 metadata:
   author: openspec
   version: "1.0"
-  generatedBy: "1.2.0"
+  generatedBy: "1.3.1"
 ---
 
 Propose a new change - create the change and generate all artifacts in one step.
@@ -39,7 +39,7 @@ When ready to implement, run /opsx-apply
    ```
    This creates a scaffolded change at `openspec/changes/<name>/` with `.openspec.yaml`.
 
-2a. **Create and checkout a branch**
+3. **Create and checkout a branch**
 
    ```bash
    git checkout -b opsx/<name>
@@ -50,7 +50,7 @@ When ready to implement, run /opsx-apply
    - If on a different `opsx/*` branch: **STOP** with error: "Already on branch `opsx/<other>` -- finish or archive that change first."
    - If on `main` or any non-opsx branch: create and checkout `opsx/<name>`.
 
-2b. **Retrieve context from Dewey**
+3a. **Retrieve context from Dewey**
 
    Before drafting the proposal, query Dewey for relevant context:
 
@@ -90,7 +90,7 @@ When ready to implement, run /opsx-apply
    All tiers produce valid results. Higher tiers provide richer
    cross-repo context but are never required.
 
-3. **Get the artifact build order**
+3b. **Get the artifact build order**
    ```bash
    openspec status --change "<name>" --json
    ```
