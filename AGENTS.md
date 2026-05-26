@@ -1,35 +1,19 @@
 # GCal Organizer Development Guidelines
 
-Auto-generated from all feature plans. Last updated: 2026-02-17
+## Overview
 
-## Active Technologies
-- Go 1.21+ + github.com/spf13/cobra (CLI), github.com/spf13/viper (config), Google Drive API v3 (006-owned-only-flag)
-- N/A (no new data persistence; flag stored in config file via existing viper mechanism) (006-owned-only-flag)
-- Go 1.24+ (module `github.com/jflowers/gcal-organizer`) + `github.com/zalando/go-keyring` v0.2.6 (macOS Keychain via `/usr/bin/security`, Linux Secret Service via D-Bus — no CGo), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `golang.org/x/oauth2` (token handling), `github.com/charmbracelet/huh` (interactive prompts), `github.com/mattn/go-isatty` (terminal detection — already indirect dep) (007-secure-credential-storage)
-- OS credential store (primary), filesystem `~/.gcal-organizer/` (fallback). No database. (007-secure-credential-storage)
-- Go 1.24+ (module `github.com/jflowers/gcal-organizer`) + `google.golang.org/api/docs/v1` (Docs API — tab creation, content insertion, heading links), `google.golang.org/genai` (Gemini SDK — transcript analysis), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config) (008-decision-extraction)
-- N/A (no new data persistence; decisions written directly to Google Docs) (008-decision-extraction)
-- Go 1.24+ (module `github.com/jflowers/gcal-organizer`, toolchain go1.24.12) + `google.golang.org/api/docs/v1`, `google.golang.org/api/drive/v3`, `google.golang.org/api/calendar/v3`, `google.golang.org/genai` (Gemini SDK), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/zalando/go-keyring` (secrets) (009-test-coverage-quality)
-- N/A (no new data persistence; this feature only adds tests) (009-test-coverage-quality)
-- Go 1.24.0 (toolchain go1.24.12), module `github.com/jflowers/gcal-organizer` + `google.golang.org/api` (Drive v3, Docs v1, Calendar v3), `google.golang.org/genai` (Gemini), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/zalando/go-keyring` (secrets) (009-test-coverage-quality)
-- N/A (no new data persistence; this feature only adds tests and configuration) (009-test-coverage-quality)
-- Go 1.24.0 (toolchain go1.24.12) + GoReleaser v2 (CI only — `goreleaser/goreleaser-action`), `gh` CLI (release asset management), native macOS `codesign` + `xcrun notarytool` (signing/notarization) (010-macos-signed-releases)
-- N/A (no data persistence; pipeline configuration files only) (010-macos-signed-releases)
-- Go 1.24+ (toolchain go1.24.12) + `google.golang.org/api/docs/v1` (Docs API), Playwright via `npx tsx` (browser automation) (011-next-steps-heading)
-- N/A (no data persistence changes) (011-next-steps-heading)
-- Go 1.24.0 (toolchain go1.24.12) + `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/charmbracelet/log` (logging) — all existing; no new dependencies (012-decision-markdown-export)
-- Local filesystem (`~/.gcal-organizer/decisions/` default). No database. (012-decision-markdown-export)
-- Go 1.24.0 (toolchain go1.24.12) + `github.com/spf13/viper` (config), `github.com/spf13/cobra` (CLI), `github.com/charmbracelet/log` (logging), `github.com/zalando/go-keyring` (secrets) — all existing; no new dependencies (013-yaml-config-decision-export)
-- Local filesystem (`~/.gcal-organizer/config.yaml` replaces `~/.gcal-organizer/.env`). Secrets remain in OS keychain. (013-yaml-config-decision-export)
-- Go 1.24.0 (toolchain go1.24.12) + `net/http` (Ollama REST API — no SDK), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/charmbracelet/log` (logging), `github.com/charmbracelet/huh` (interactive prompts) (014-local-ai-ollama)
-- N/A (no new data persistence; configuration via existing YAML config file) (014-local-ai-ollama)
+A Go CLI tool that automates meeting note organization, calendar
+attachment syncing, AI-powered task assignment, and decision
+extraction using Google Workspace APIs and Gemini AI.
 
-- **Language**: Go 1.24+
-- **CLI Framework**: github.com/spf13/cobra
+- **Type**: CLI tool (Cobra)
+- **Language**: Go 1.24+ (module `github.com/jflowers/gcal-organizer`, toolchain go1.24.12)
 - **Google APIs**: Drive v3, Docs v1, Calendar v3, Tasks v1
-- **AI**: Gemini API via google.golang.org/genai
-- **Browser Automation**: Playwright (TypeScript) via npx tsx
+- **AI**: Gemini API via `google.golang.org/genai`; Ollama for local AI
+- **Browser Automation**: Playwright (TypeScript) via `npx tsx`
 - **Authentication**: OAuth2 (Workspace), GCP API Key (Gemini)
+- **Secrets**: OS keychain via `github.com/zalando/go-keyring` (macOS Keychain, Linux Secret Service)
+- **License**: MIT
 
 ## Project Structure
 
@@ -38,38 +22,58 @@ gcal-organizer/
 ├── cmd/gcal-organizer/          # CLI entry point
 ├── internal/
 │   ├── auth/                    # OAuth2 and API key handling
-│   ├── config/                  # Configuration management
-│   ├── drive/                   # Google Drive operations
-│   ├── docs/                    # Google Docs parsing + Decisions tab creation
 │   ├── calendar/                # Calendar operations
+│   ├── config/                  # Configuration management (YAML + migration)
+│   ├── docs/                    # Google Docs parsing + Decisions tab creation
+│   ├── drive/                   # Google Drive operations
+│   ├── export/                  # Decision markdown export
 │   ├── gemini/                  # Gemini AI client
-│   ├── secrets/                 # Credential storage abstraction (keychain/file)
-│   └── organizer/               # Main orchestration
+│   ├── logging/                 # Structured logging setup
+│   ├── ollama/                  # Local AI via Ollama REST API
+│   ├── organizer/               # Main orchestration
+│   ├── retry/                   # HTTP retry with backoff
+│   ├── secrets/                 # Credential storage (keychain/file)
+│   └── ux/                      # Terminal UX utilities
 ├── pkg/models/                  # Shared data models
 ├── browser/                     # Browser automation (TypeScript)
+├── docs/                        # User documentation
+├── man/                         # Man pages
+├── specs/                       # Speckit feature specs (NNN-name/)
+├── openspec/                    # OpenSpec change artifacts
 ├── .specify/                    # Spec-driven development artifacts
 └── .opencode/                   # OpenCode agent commands
 ```
 
-## Commands
+## Build & Test Commands
 
 ```bash
-# Build
-go build ./...
+# Build (CI uses specific target)
+go build ./cmd/gcal-organizer
 
-# Test
-go test ./...
+# Test (CI uses -race flag)
+go test -race ./...
 
 # Lint
 go vet ./...
 gofmt -l .
 
-# Run CI checks locally
+# Module tidiness check (CI step)
+go mod tidy
+git diff --exit-code go.mod go.sum
+
+# Run CI checks locally (mirrors .github/workflows/ci.yml)
 make ci
 
 # Install git hooks
 make install-hooks
 ```
+
+### CI Workflow Structure
+
+| Workflow | File | Trigger |
+|----------|------|---------|
+| CI | `.github/workflows/ci.yml` | push/PR to main |
+| Release | `.github/workflows/release.yml` | tag push |
 
 ## Code Style
 
@@ -77,12 +81,23 @@ make install-hooks
 - Standard project layout (cmd/, internal/, pkg/)
 - Error handling via explicit return values, not panic
 - Use `context.Context` for cancellation and timeouts
-- Table-driven tests preferred
 - Wrap errors with context using `fmt.Errorf` with `%w`
+- Define interfaces at the consumer site (e.g., `organizer` defines `DocsService`, `DriveService`)
+- Import grouping: stdlib, external, internal (separated by blank lines)
 
 ### Documentation
 - README.md, SETUP.md, man pages must be kept current
 - New features require documentation before completion
+
+## Testing Conventions
+
+- **Framework**: Go stdlib `testing` package (no assertion libraries)
+- **Naming**: `TestFunctionName_Scenario` (e.g., `TestParseEvent_DateTimeFormat`, `TestDo_RetriesOn429`)
+- **Style**: Table-driven tests with `t.Run` subtests for cases with multiple inputs
+- **Assertions**: Direct comparisons with `t.Errorf`/`t.Fatalf` (no testify/assert)
+- **Isolation**: `t.TempDir()` for filesystem tests; struct literal construction for unit tests (no shared global state)
+- **Race detection**: CI runs with `-race`; all tests must be race-safe
+- **Coverage**: `make test-coverage` generates `coverage.out` and `coverage.html`
 
 ## Recent Changes
 - 014-local-ai-ollama: Added Go 1.24.0 (toolchain go1.24.12) + `net/http` (Ollama REST API — no SDK), `github.com/spf13/cobra` (CLI), `github.com/spf13/viper` (config), `github.com/charmbracelet/log` (logging), `github.com/charmbracelet/huh` (interactive prompts)
@@ -102,8 +117,44 @@ Browser automation via Playwright for task assignment through Google Docs native
 - **Outcome Orientation:** Focus on conveying business value and user intent rather than low-level technical sub-tasks.
 - **Intent-to-Context:** Treat specs and rules as the medium through which human intent is manifested into code.
 
-## Behavioral Constraints
-- **Zero-Waste Mandate:** No orphaned code, unused dependencies, or "Feature Zombie" bloat.
+## Behavioral Rules
+
+These rules are non-negotiable. Violations are CRITICAL severity.
+
+- **Gatekeeping**: MUST NOT modify quality/governance gates
+  (coverage thresholds, CRAP scores, severity definitions,
+  CI flags, agent settings, constitution MUST rules, review
+  limits, workflow markers). Stop and report instead.
+- **Phase boundaries**: MUST NOT cross workflow phase boundaries.
+  Spec phases: spec artifacts only. Implement: source code.
+  Review: fixes only. Violation = process error, stop immediately.
+- **CI parity**: MUST replicate CI checks locally before marking
+  tasks complete. Derive commands from `.github/workflows/`.
+- **Review council**: MUST run `/review-council` before PR
+  submission. Resolve all REQUEST CHANGES. No code changes
+  between APPROVE and PR. Exempt: constitution amendments,
+  docs-only, emergency hotfixes.
+- **Branch protection**: MUST NOT commit directly to `main`.
+  All changes via feature branches and PRs.
+- **Documentation gate**: Before marking a task complete,
+  assess documentation impact: `CHANGELOG.md` for change
+  entries, `AGENTS.md` for structural updates (project
+  structure, conventions, build commands), `README.md` for
+  description changes.
+- **Website gate**: MUST file `unbound-force/website` issue
+  for user-facing changes before PR merge. Exempt: internal
+  refactoring, test-only, CI-only, spec artifacts.
+- **Zero-waste**: No orphaned specs, unused standards, or
+  aspirational documents that do not map to actionable work.
+
+### PR Review Commands
+
+| Command | When | Scope |
+|---------|------|-------|
+| `/review-council` | Pre-PR (local) | 5+ Divisor agents |
+| `/review-pr [N]` | Post-PR (GitHub) | Single agent, CI analysis |
+
+### Behavioral Constraints (Extended)
 - **Neighborhood Rule:** Changes must be audited for negative impacts on adjacent modules or the wider ecosystem.
 - **Intent Drift Detection:** Evaluation must detect when the implementation drifts away from the original human-written "Statement of Intent."
 - **Automated Governance:** Primary feedback is provided via automated constraints, reserving human energy for high-level security and logic.
@@ -160,17 +211,6 @@ Agents MUST NOT cross workflow phase boundaries:
 A phase boundary violation is treated as a process error.
 The agent MUST stop and report the violation rather than
 proceeding with out-of-phase changes.
-
-### CI Parity Gate
-
-Before marking any implementation task complete or
-declaring a PR ready, agents MUST replicate the CI checks
-locally. Read `.github/workflows/` to identify the exact
-commands CI runs, then execute those same commands. Any
-failure is a blocking error — a task is not complete
-until all CI-equivalent checks pass locally. Do not rely
-on a memorized list of commands; always derive them from
-the workflow files, which are the source of truth.
 
 ## Technical Guardrails
 - **WORM Persistence:** Use Write-Once-Read-Many patterns where data integrity is paramount.
@@ -324,6 +364,25 @@ search only:
 - Use Grep for keyword search across the codebase
 - Use Glob for file pattern matching
 
+## Architecture
+
+- **Cobra CLI delegation**: `cmd/gcal-organizer/main.go` wires
+  subcommands (`run`, `organize`, `sync-calendar`, `assign-tasks`,
+  `install`, `uninstall`). Each subcommand delegates to
+  `internal/` service packages.
+- **Consumer-site interfaces**: The `organizer` package defines
+  interfaces (`DocsService`, `DriveService`, `CalendarService`)
+  consumed from `internal/` implementations, enabling test
+  doubles without mocking frameworks.
+- **Service composition**: `internal/organizer/` orchestrates
+  the 4-step workflow by composing calendar, drive, docs, and
+  gemini services via dependency injection at construction.
+- **Keychain-first secrets**: `internal/secrets/` abstracts OS
+  keychain (primary) with filesystem fallback, keeping
+  credentials out of config files.
+- **Retry with backoff**: `internal/retry/` provides generic
+  HTTP retry with exponential backoff for Google API rate limits.
+
 <!-- MANUAL ADDITIONS END -->
 
 ## Convention Packs
@@ -339,3 +398,5 @@ before writing or reviewing code.
 - `.opencode/uf/packs/content-custom.md`
 - `.opencode/uf/packs/go.md`
 - `.opencode/uf/packs/go-custom.md`
+- `.opencode/uf/packs/typescript.md`
+- `.opencode/uf/packs/typescript-custom.md`
